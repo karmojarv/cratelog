@@ -4,25 +4,22 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Cratelog</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #0c0c0c; color: #e8e8e8; font-family: 'Inter', sans-serif; min-height: 100vh; }
+body { background: #f2f0eb; color: #1a1a1a; font-family: 'IBM Plex Sans', sans-serif; min-height: 100vh; font-size: 15px; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@keyframes fadeUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
-@keyframes pulse { 0%,100% { opacity:0.4; } 50% { opacity:1; } }
+@keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #0c0c0c; }
-::-webkit-scrollbar-thumb { background: #222; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #333; }
-.tab-btn { transition: color 0.15s, border-color 0.15s; }
-.tab-btn:hover { color: #888 !important; }
-.artist-row:hover { background: #141414; }
-.artist-row { transition: background 0.1s; border-radius: 6px; }
+::-webkit-scrollbar-track { background: #e8e6e1; }
+::-webkit-scrollbar-thumb { background: #bbb; border-radius: 2px; }
+a { color: #1a1a1a; }
+.row-hover:hover { background: #e8e6e1; }
+.row-hover { transition: background 0.1s; }
+.tab-hover:hover { color: #1a1a1a !important; }
 </style>
 </head>
 <body>
@@ -82,59 +79,48 @@ async function fetchAllRanges(type, token) {
 }
 async function fetchAudioFeatures(trackIds, token) {
   if (!trackIds.length) return [];
-  // batch in groups of 100
   const batches = [];
-  for (let i=0; i<trackIds.length; i+=100) batches.push(trackIds.slice(i,i+100));
-  const results = await Promise.all(batches.map(b => sGet("/audio-features?ids="+b.join(","),token)));
-  return results.flatMap(r => (r&&r.audio_features)||[]).filter(Boolean);
+  for (let i=0;i<trackIds.length;i+=100) batches.push(trackIds.slice(i,i+100));
+  const results = await Promise.all(batches.map(b=>sGet("/audio-features?ids="+b.join(","),token)));
+  return results.flatMap(r=>(r&&r.audio_features)||[]).filter(Boolean);
 }
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 function aggregateGenres(artists) {
   const c={};
   artists.forEach(a=>(a.genres||[]).forEach(g=>{c[g]=(c[g]||0)+1;}));
-  return Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,24);
+  return Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,30);
 }
 function newIn(cur,prev) { const s=new Set(prev.map(x=>x.id)); return cur.filter(x=>!s.has(x.id)); }
 function inCommon(a,b) { const s=new Set(b.map(x=>x.id)); return a.filter(x=>s.has(x.id)); }
 function avg(arr) { return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0; }
-
+function obscurityScore(artists) { return Math.round(100 - avg(artists.map(a=>a.popularity||50))); }
+function obscurityLabel(score) {
+  if (score>=80) return "Deep Underground";
+  if (score>=65) return "Mostly Niche";
+  if (score>=50) return "Indie Adjacent";
+  if (score>=35) return "Mainstream Aware";
+  return "Chart Familiar";
+}
 function genreColor(genre) {
   const hash = genre.split("").reduce((a,c)=>a+c.charCodeAt(0),0);
-  const hues=[160,195,45,280,340,20,90,230];
-  return "hsl("+hues[hash%hues.length]+",65%,58%)";
-}
-
-function obscurityScore(artists) {
-  if (!artists.length) return 50;
-  const avgPop = avg(artists.map(a=>a.popularity||50));
-  return Math.round(100 - avgPop);
-}
-
-function obscurityLabel(score) {
-  if (score >= 80) return "Deep Underground";
-  if (score >= 65) return "Mostly Niche";
-  if (score >= 50) return "Indie Adjacent";
-  if (score >= 35) return "Mainstream Aware";
-  return "Chart Familiar";
+  const palette = ["#2563eb","#16a34a","#9333ea","#dc2626","#d97706","#0891b2","#be185d","#65a30d"];
+  return palette[hash % palette.length];
 }
 
 function generateAnalysis(data) {
   const longGenres = aggregateGenres(data.artists.long);
   const shortGenres = aggregateGenres(data.artists.short);
-  const genreNames = longGenres.map(x=>x[0]);
-  const recentGenreNames = shortGenres.map(x=>x[0]);
-  const g = genreNames.join(" ");
+  const g = longGenres.map(x=>x[0]).join(" ");
   const topArtists = data.artists.long.slice(0,5).map(a=>a.name);
   const newArtists = newIn(data.artists.short, data.artists.long).slice(0,3).map(a=>a.name);
   const stableArtists = inCommon(data.artists.long.slice(0,10), data.artists.short.slice(0,10)).slice(0,3).map(a=>a.name);
-  const genresDrifting = recentGenreNames.filter(rg=>!genreNames.slice(0,8).includes(rg)).slice(0,3);
-  const driftingToward = genresDrifting.length>0 ? genresDrifting.join(", ") : null;
-  const isExp=/experimental|avant|noise|glitch|abstract|art.rock|post.rock|kraut/.test(g);
+  const genresDrifting = shortGenres.map(x=>x[0]).filter(rg=>!longGenres.map(x=>x[0]).slice(0,8).includes(rg)).slice(0,3);
+  const isExp=/experimental|avant|noise|glitch|abstract|post.rock|kraut/.test(g);
   const isElec=/electronic|techno|house|ambient|synthpop|idm|industrial|electro/.test(g);
   const isDark=/goth|dark|doom|drone|black|death|post.punk|cold.wave|darkwave/.test(g);
   const isDance=/dance|disco|funk|afrobeats|techno|house|club/.test(g);
-  const isIndie=/indie|alternative|lo.fi|shoegaze|dream.pop|chamber/.test(g);
+  const isIndie=/indie|alternative|lo.fi|shoegaze|dream.pop/.test(g);
   const isJazz=/jazz|soul|r.b|blues|neo.soul/.test(g);
   const isClassical=/classical|contemporary|minimalism|orchestral/.test(g);
   const isHipHop=/hip.hop|rap|trap|grime/.test(g);
@@ -144,123 +130,196 @@ function generateAnalysis(data) {
   else if (isExp&&isDark) core="avant-garde darkness and experimental texture";
   else if (isElec&&isDark) core="brooding electronic music with industrial undertones";
   else if (isElec&&isDance) core="dance-floor electronics with a curatorial edge";
-  else if (isIndie&&isExp) core="experimental indie with a taste for the unconventional";
+  else if (isIndie&&isExp) core="experimental indie";
   else if (isJazz&&isElec) core="electronic music rooted in jazz sensibility";
   else if (isClassical&&isElec) core="contemporary classical and electronic sound";
-  else if (isIndie) core="indie and alternative music with a thoughtful curatorial approach";
-  else if (isElec) core="electronic music across its many subgenres";
-  else if (isHipHop) core="hip-hop and its surrounding sonic universe";
+  else if (isIndie) core="indie and alternative music";
+  else if (isElec) core="electronic music";
+  else if (isHipHop) core="hip-hop";
   else core="a wide-ranging collection built on strong aesthetic instincts";
   const t3=topArtists.slice(0,3).join(", ");
   let identity="Your listening is anchored in "+core+" — a thread running through your long-term relationship with artists like "+t3+". ";
   if (isDark) identity+="There is a consistent pull toward music with weight and atmosphere, where texture matters as much as melody. ";
   if (isExp) identity+="You consistently gravitate toward artists who treat genre as a starting point rather than a destination. ";
-  if (isIntl) identity+="Your taste extends well beyond Anglophone scenes, suggesting genuine curiosity about music as a global practice. ";
+  if (isIntl) identity+="Your taste extends well beyond Anglophone scenes. ";
   let evol="";
-  if (stableArtists.length>2) evol+=stableArtists.join(", ")+" have remained constants across your listening history — a backbone that does not shift. ";
-  if (newArtists.length>0&&driftingToward) evol+="Recently you have pulled toward "+newArtists.join(", ")+", suggesting a current interest in "+driftingToward+". Whether this is a phase or a new direction only time will tell.";
+  if (stableArtists.length>2) evol+=stableArtists.join(", ")+" have remained constants across your listening history. ";
+  if (newArtists.length>0&&genresDrifting.length>0) evol+="Recently you have pulled toward "+newArtists.join(", ")+", suggesting a current interest in "+genresDrifting.join(", ")+". Whether this is a phase or a new direction only time will tell.";
   else if (newArtists.length>0) evol+=newArtists.join(", ")+" have entered your recent rotation — newer arrivals that suggest your taste is still actively moving.";
-  else evol+="Your recent and all-time charts are closely aligned — a period of deepening rather than expanding, returning to familiar territory with renewed focus.";
+  else evol+="Your recent and all-time charts are closely aligned — a period of deepening rather than expanding.";
   const families=[];
-  if (isExp) families.push("experimental and avant-garde");
+  if (isExp) families.push("experimental/avant-garde");
   if (isElec) families.push("electronic");
-  if (isDark) families.push("dark and post-punk");
-  if (isIndie) families.push("indie and alternative");
-  if (isJazz) families.push("jazz and soul");
+  if (isDark) families.push("dark/post-punk");
+  if (isIndie) families.push("indie/alternative");
+  if (isJazz) families.push("jazz/soul");
   if (isClassical) families.push("contemporary classical");
   if (isHipHop) families.push("hip-hop");
   if (isDance) families.push("dance");
   let genres="Your genre map spans "+(families.length>0?families.join(", "):"diverse")+" territory. ";
-  genres+="These share a common thread of music that rewards close listening, where surface aesthetics give way to structural depth. ";
-  genres+=isExp?"The presence of experimental genres suggests someone who uses music as a lens for thinking about sound itself.":isElec?"Electronic music runs as connective tissue, suggesting an interest in production and texture as primary creative acts.":"The breadth here reflects not restlessness but range — a listener who can move between modes without losing a sense of self.";
+  genres+=isExp?"The presence of experimental genres suggests someone who uses music as a lens for thinking about sound itself.":isElec?"Electronic music runs as connective tissue — production and texture as primary creative acts.":"The breadth here reflects range — a listener who moves between modes without losing a sense of self.";
   let pers="You listen with intention. ";
-  pers+=isExp?"The density of experimental genres suggests someone for whom music is a serious cultural practice, not background noise. ":"The specificity of your taste suggests someone who actively seeks music out rather than waiting for it to arrive. ";
-  pers+=isDark?"There is a preference for music that sits with discomfort rather than resolving it — a tolerance for ambiguity that extends beyond the speakers.":isDance?"The dance music thread suggests you understand music as something physical and communal, not just cerebral.":"You likely have strong opinions about what makes music worth your time.";
+  pers+=isExp?"The density of experimental genres suggests someone for whom music is a serious cultural practice, not background noise. ":"The specificity of your taste suggests someone who actively seeks music out. ";
+  pers+=isDark?"There is a preference for music that sits with discomfort rather than resolving it.":isDance?"The dance music thread suggests you understand music as physical and communal, not just cerebral.":"You likely have strong opinions about what makes music worth your time.";
   return [
-    {title:"Your Sound Identity",body:identity.trim()},
-    {title:"How Your Taste Has Evolved",body:evol.trim()},
-    {title:"The Genres That Define You",body:genres.trim()},
-    {title:"What Your Taste Says About You",body:pers.trim()},
+    {title:"Sound Identity",body:identity.trim()},
+    {title:"Evolution",body:evol.trim()},
+    {title:"Genre World",body:genres.trim()},
+    {title:"What It Says",body:pers.trim()},
   ];
 }
 
-// ── VISUAL COMPONENTS ─────────────────────────────────────────────────────────
+// ── COMPONENTS ────────────────────────────────────────────────────────────────
+
 function Loader({ msg }) {
   return (
-    <div style={{minHeight:"100vh",background:"#0c0c0c",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
-      <div style={{width:32,height:32,border:"2px solid #1e1e1e",borderTop:"2px solid #1DB954",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
-      <p style={{color:"#333",fontSize:12,fontFamily:"'JetBrains Mono',monospace",letterSpacing:3,textTransform:"uppercase"}}>{msg}</p>
+    <div style={{minHeight:"100vh",background:"#f2f0eb",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:14}}>
+      <div style={{width:28,height:28,border:"2px solid #ccc",borderTop:"2px solid #1a1a1a",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
+      <p style={{color:"#999",fontSize:13,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:2,textTransform:"uppercase"}}>{msg}</p>
     </div>
   );
 }
 
-function StatPill({ label, value, color }) {
+const C = {
+  bg: "#f2f0eb",
+  bgCard: "#eceae4",
+  border: "#d4d0c8",
+  borderDark: "#b8b4a8",
+  text: "#1a1a1a",
+  textMid: "#555",
+  textLight: "#888",
+  green: "#2d6a2d",
+  accent: "#1a1a1a",
+};
+
+function Panel({ children, style }) {
   return (
-    <div style={{background:"#141414",border:"1px solid #1e1e1e",borderRadius:8,padding:"12px 16px",minWidth:120}}>
-      <div style={{fontSize:11,color:"#444",fontFamily:"'JetBrains Mono',monospace",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>{label}</div>
-      <div style={{fontSize:22,fontWeight:600,color:color||"#e8e8e8",fontFamily:"'Playfair Display',serif"}}>{value}</div>
+    <div style={{background:C.bgCard,border:"1px solid "+C.border,padding:"18px 20px",...style}}>
+      {children}
     </div>
   );
 }
 
-function FeatureBar({ label, value, color }) {
-  const pct = Math.round(value * 100);
+function SLabel({ children }) {
+  return <div style={{fontSize:11,letterSpacing:"2.5px",textTransform:"uppercase",color:C.textLight,marginBottom:14,fontFamily:"'IBM Plex Mono',monospace",fontWeight:500,borderBottom:"1px solid "+C.border,paddingBottom:6}}>{children}</div>;
+}
+
+function Divider() {
+  return <div style={{height:1,background:C.border,margin:"14px 0"}}/>;
+}
+
+function ArtistRow({ artist, rank, isNew, isGone }) {
+  const img = artist.images&&(artist.images[2]||artist.images[1]||artist.images[0]);
+  const pop = artist.popularity||0;
   return (
-    <div style={{marginBottom:14}}>
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
-        <span style={{fontSize:12,color:"#888",fontFamily:"'JetBrains Mono',monospace"}}>{label}</span>
-        <span style={{fontSize:12,color:"#444",fontFamily:"'JetBrains Mono',monospace"}}>{pct}%</span>
+    <div className="row-hover" style={{display:"flex",alignItems:"center",gap:10,padding:"7px 6px",borderBottom:"1px solid "+C.border,opacity:isGone?0.4:1}}>
+      <span style={{width:26,textAlign:"right",color:C.textLight,fontSize:12,flexShrink:0,fontFamily:"'IBM Plex Mono',monospace"}}>{rank}</span>
+      {img?<img src={img.url} alt="" style={{width:34,height:34,borderRadius:2,objectFit:"cover",flexShrink:0,border:"1px solid "+C.border}}/>:<div style={{width:34,height:34,borderRadius:2,background:C.border,flexShrink:0}}/>}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:14,color:isGone?C.textLight:C.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{artist.name}</div>
+        <div style={{fontSize:11,color:C.textLight,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontFamily:"'IBM Plex Mono',monospace"}}>{artist.genres&&artist.genres.slice(0,2).join(" / ")}</div>
       </div>
-      <div style={{height:3,background:"#1a1a1a",borderRadius:2}}>
-        <div style={{height:"100%",width:pct+"%",background:color||"#1DB954",borderRadius:2,transition:"width 1s ease"}}/>
+      <div style={{width:52,flexShrink:0}}>
+        <div style={{height:2,background:C.border,borderRadius:1}}>
+          <div style={{height:"100%",width:pop+"%",background:"#1a1a1a",borderRadius:1}}/>
+        </div>
+        <div style={{fontSize:9,color:C.textLight,marginTop:2,fontFamily:"'IBM Plex Mono',monospace",textAlign:"right"}}>{pop}</div>
       </div>
+      {isNew&&<span style={{fontSize:9,color:C.green,border:"1px solid "+C.green,borderRadius:2,padding:"1px 6px",flexShrink:0,fontFamily:"'IBM Plex Mono',monospace"}}>+new</span>}
+      {isGone&&<span style={{fontSize:9,color:C.textLight,border:"1px solid "+C.border,borderRadius:2,padding:"1px 6px",flexShrink:0,fontFamily:"'IBM Plex Mono',monospace"}}>faded</span>}
+    </div>
+  );
+}
+
+function TrackRow({ track, rank }) {
+  const img = track.album&&track.album.images&&track.album.images[2];
+  const ms = track.duration_ms;
+  const dur = ms?Math.floor(ms/60000)+":"+String(Math.floor((ms%60000)/1000)).padStart(2,"0"):"";
+  const pop = track.popularity||0;
+  return (
+    <div className="row-hover" style={{display:"flex",alignItems:"center",gap:10,padding:"7px 6px",borderBottom:"1px solid "+C.border}}>
+      <span style={{width:26,textAlign:"right",color:C.textLight,fontSize:12,flexShrink:0,fontFamily:"'IBM Plex Mono',monospace"}}>{rank}</span>
+      {img?<img src={img.url} alt="" style={{width:34,height:34,borderRadius:2,objectFit:"cover",flexShrink:0,border:"1px solid "+C.border}}/>:<div style={{width:34,height:34,borderRadius:2,background:C.border,flexShrink:0}}/>}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:14,color:C.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{track.name}</div>
+        <div style={{fontSize:11,color:C.textLight,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontFamily:"'IBM Plex Mono',monospace"}}>{track.artists&&track.artists.map(a=>a.name).join(", ")}</div>
+      </div>
+      <span style={{fontSize:11,color:C.textLight,flexShrink:0,fontFamily:"'IBM Plex Mono',monospace"}}>{dur}</span>
+      <div style={{width:52,flexShrink:0}}>
+        <div style={{height:2,background:C.border,borderRadius:1}}>
+          <div style={{height:"100%",width:pop+"%",background:"#1a1a1a",borderRadius:1}}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FeatureBar({ label, value, note }) {
+  const pct = Math.round(value*100);
+  return (
+    <div style={{marginBottom:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:5,alignItems:"baseline"}}>
+        <span style={{fontSize:13,color:C.text,fontFamily:"'IBM Plex Mono',monospace"}}>{label}</span>
+        <span style={{fontSize:12,color:C.textLight,fontFamily:"'IBM Plex Mono',monospace"}}>{pct}%{note?" · "+note:""}</span>
+      </div>
+      <div style={{height:3,background:C.border,borderRadius:1}}>
+        <div style={{height:"100%",width:pct+"%",background:C.accent,borderRadius:1,transition:"width 0.8s ease"}}/>
+      </div>
+    </div>
+  );
+}
+
+function GenreCloud({ genres }) {
+  const max = genres[0]?genres[0][1]:1;
+  return (
+    <div style={{display:"flex",flexWrap:"wrap",gap:"8px 12px",lineHeight:1.5}}>
+      {genres.map(([name,count])=>{
+        const weight = count/max;
+        const size = 12 + weight*10;
+        const opacity = 0.5+weight*0.5;
+        return (
+          <span key={name} style={{fontSize:size,color:C.text,opacity,fontFamily:"'IBM Plex Mono',monospace",cursor:"default",letterSpacing:"0.2px"}}>
+            {name}
+          </span>
+        );
+      })}
     </div>
   );
 }
 
 function MoodMap({ tracks, features }) {
-  const size = 460, pad = 40;
-  const inner = size - pad*2;
-  const featureMap = {};
-  features.forEach(f => { if(f) featureMap[f.id] = f; });
-  const points = tracks.slice(0,40).map(t => {
-    const f = featureMap[t.id];
-    if (!f) return null;
-    return { x: pad + f.energy * inner, y: pad + (1-f.valence) * inner, name: t.name, artist: t.artists&&t.artists[0]&&t.artists[0].name, energy:f.energy, valence:f.valence };
-  }).filter(Boolean);
-
   const [hovered, setHovered] = useState(null);
-
+  const size=480, pad=44, inner=size-pad*2;
+  const fm={};
+  features.forEach(f=>{if(f)fm[f.id]=f;});
+  const pts=tracks.slice(0,50).map(t=>{
+    const f=fm[t.id]; if(!f) return null;
+    return{x:pad+f.energy*inner, y:pad+(1-f.valence)*inner, name:t.name, artist:t.artists&&t.artists[0]&&t.artists[0].name, e:f.energy, v:f.valence};
+  }).filter(Boolean);
   return (
-    <div style={{position:"relative"}}>
-      <svg width={size} height={size} style={{display:"block",maxWidth:"100%"}}>
-        {/* Grid */}
-        <line x1={pad} y1={size/2} x2={size-pad} y2={size/2} stroke="#1a1a1a" strokeWidth="1" strokeDasharray="4,4"/>
-        <line x1={size/2} y1={pad} x2={size/2} y2={size-pad} stroke="#1a1a1a" strokeWidth="1" strokeDasharray="4,4"/>
-        {/* Quadrant labels */}
-        <text x={pad+8} y={pad+16} style={{fontSize:10,fill:"#2a2a2a",fontFamily:"'JetBrains Mono',monospace"}}>TURBULENT</text>
-        <text x={size-pad-8} y={pad+16} textAnchor="end" style={{fontSize:10,fill:"#2a2a2a",fontFamily:"'JetBrains Mono',monospace"}}>EUPHORIC</text>
-        <text x={pad+8} y={size-pad-8} style={{fontSize:10,fill:"#2a2a2a",fontFamily:"'JetBrains Mono',monospace"}}>BROODING</text>
-        <text x={size-pad-8} y={size-pad-8} textAnchor="end" style={{fontSize:10,fill:"#2a2a2a",fontFamily:"'JetBrains Mono',monospace"}}>SERENE</text>
-        {/* Axis labels */}
-        <text x={size/2} y={size-6} textAnchor="middle" style={{fontSize:10,fill:"#333",fontFamily:"'JetBrains Mono',monospace"}}>← CALM · ENERGY · INTENSE →</text>
-        {/* Points */}
-        {points.map((p,i) => (
-          <circle key={i} cx={p.x} cy={p.y} r={hovered===i?7:5}
-            fill={hovered===i?"#1DB954":"rgba(29,185,84,0.5)"}
-            stroke={hovered===i?"#1DB954":"rgba(29,185,84,0.2)"}
-            strokeWidth="1"
-            style={{cursor:"pointer",transition:"r 0.1s, fill 0.1s"}}
+    <div style={{position:"relative",display:"inline-block"}}>
+      <svg width={size} height={size} style={{display:"block",maxWidth:"100%",background:C.bgCard,border:"1px solid "+C.border}}>
+        <line x1={pad} y1={size/2} x2={size-pad} y2={size/2} stroke={C.border} strokeWidth="1"/>
+        <line x1={size/2} y1={pad} x2={size/2} y2={size-pad} stroke={C.border} strokeWidth="1"/>
+        {[[pad+4,pad+14,"TURBULENT"],[size-pad-4,pad+14,"EUPHORIC","end"],[pad+4,size-pad-4,"BROODING"],[size-pad-4,size-pad-4,"SERENE","end"]].map(([x,y,label,anchor])=>(
+          <text key={label} x={x} y={y} textAnchor={anchor||"start"} style={{fontSize:10,fill:C.textLight,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:1}}>{label}</text>
+        ))}
+        <text x={size/2} y={size-6} textAnchor="middle" style={{fontSize:10,fill:C.textLight,fontFamily:"'IBM Plex Mono',monospace"}}>← CALM · ENERGY · INTENSE →</text>
+        <text x={10} y={size/2} textAnchor="middle" transform={"rotate(-90,10,"+size/2+")"} style={{fontSize:10,fill:C.textLight,fontFamily:"'IBM Plex Mono',monospace"}}>← DARK · MOOD · BRIGHT →</text>
+        {pts.map((p,i)=>(
+          <circle key={i} cx={p.x} cy={p.y} r={hovered===i?7:4}
+            fill={hovered===i?"#1a1a1a":"transparent"}
+            stroke="#1a1a1a"
+            strokeWidth={hovered===i?1.5:1}
+            style={{cursor:"pointer",transition:"r 0.1s"}}
             onMouseEnter={()=>setHovered(i)} onMouseLeave={()=>setHovered(null)}/>
         ))}
       </svg>
-      {hovered !== null && points[hovered] && (
-        <div style={{position:"absolute",top:points[hovered].y-48,left:Math.min(points[hovered].x+10,size-180),background:"#141414",border:"1px solid #2a2a2a",borderRadius:6,padding:"8px 12px",pointerEvents:"none",zIndex:10,minWidth:160}}>
-          <div style={{fontSize:13,color:"#e8e8e8",fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:160}}>{points[hovered].name}</div>
-          <div style={{fontSize:11,color:"#555",marginTop:2}}>{points[hovered].artist}</div>
-          <div style={{fontSize:10,color:"#333",marginTop:4,fontFamily:"'JetBrains Mono',monospace"}}>
-            E {Math.round(points[hovered].energy*100)} · V {Math.round(points[hovered].valence*100)}
-          </div>
+      {hovered!==null&&pts[hovered]&&(
+        <div style={{position:"absolute",top:Math.max(4,pts[hovered].y-52),left:Math.min(pts[hovered].x+12,size-170),background:C.bgCard,border:"1px solid "+C.borderDark,padding:"8px 12px",pointerEvents:"none",zIndex:10,minWidth:160}}>
+          <div style={{fontSize:13,color:C.text,fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:155}}>{pts[hovered].name}</div>
+          <div style={{fontSize:11,color:C.textMid,marginTop:2,fontFamily:"'IBM Plex Mono',monospace"}}>{pts[hovered].artist}</div>
+          <div style={{fontSize:10,color:C.textLight,marginTop:4,fontFamily:"'IBM Plex Mono',monospace"}}>E:{Math.round(pts[hovered].e*100)} V:{Math.round(pts[hovered].v*100)}</div>
         </div>
       )}
     </div>
@@ -268,93 +327,26 @@ function MoodMap({ tracks, features }) {
 }
 
 function RadarChart({ data }) {
-  const size=260,cx=130,cy=130,r=90;
+  const size=240,cx=120,cy=120,r=82;
   const keys=Object.keys(data),n=keys.length;
   const pts=keys.map((k,i)=>{
     const a=(i/n)*Math.PI*2-Math.PI/2,val=data[k]/10;
-    return{x:cx+r*val*Math.cos(a),y:cy+r*val*Math.sin(a),lx:cx+(r+34)*Math.cos(a),ly:cy+(r+34)*Math.sin(a),label:k};
+    return{x:cx+r*val*Math.cos(a),y:cy+r*val*Math.sin(a),lx:cx+(r+32)*Math.cos(a),ly:cy+(r+32)*Math.sin(a),label:k};
   });
   return (
     <svg width={size} height={size} style={{overflow:"visible"}}>
       {[0.25,0.5,0.75,1].map(lvl=>(
-        <polygon key={lvl} points={keys.map((_,i)=>{const a=(i/n)*Math.PI*2-Math.PI/2;return(cx+r*lvl*Math.cos(a))+","+(cy+r*lvl*Math.sin(a));}).join(" ")} fill="none" stroke="#1a1a1a" strokeWidth="1"/>
+        <polygon key={lvl} points={keys.map((_,i)=>{const a=(i/n)*Math.PI*2-Math.PI/2;return(cx+r*lvl*Math.cos(a))+","+(cy+r*lvl*Math.sin(a));}).join(" ")} fill="none" stroke={C.border} strokeWidth="1"/>
       ))}
-      {keys.map((_,i)=>{const a=(i/n)*Math.PI*2-Math.PI/2;return<line key={i} x1={cx} y1={cy} x2={cx+r*Math.cos(a)} y2={cy+r*Math.sin(a)} stroke="#1a1a1a" strokeWidth="1"/>;  })}
-      <polygon points={pts.map(p=>p.x+","+p.y).join(" ")} fill="rgba(29,185,84,0.12)" stroke="#1DB954" strokeWidth="2"/>
-      {pts.map((p,i)=><circle key={i} cx={p.x} cy={p.y} r="4" fill="#1DB954"/>)}
-      {pts.map((p,i)=><text key={i} x={p.lx} y={p.ly} textAnchor="middle" dominantBaseline="middle" style={{fontSize:9,fill:"#555",fontFamily:"'JetBrains Mono',monospace",textTransform:"uppercase",letterSpacing:1}}>{p.label}</text>)}
+      {keys.map((_,i)=>{const a=(i/n)*Math.PI*2-Math.PI/2;return<line key={i} x1={cx} y1={cy} x2={cx+r*Math.cos(a)} y2={cy+r*Math.sin(a)} stroke={C.border} strokeWidth="1"/>;  })}
+      <polygon points={pts.map(p=>p.x+","+p.y).join(" ")} fill="rgba(26,26,26,0.08)" stroke="#1a1a1a" strokeWidth="1.5"/>
+      {pts.map((p,i)=><circle key={i} cx={p.x} cy={p.y} r="3.5" fill="#1a1a1a"/>)}
+      {pts.map((p,i)=><text key={i} x={p.lx} y={p.ly} textAnchor="middle" dominantBaseline="middle" style={{fontSize:9,fill:C.textLight,fontFamily:"'IBM Plex Mono',monospace",textTransform:"uppercase",letterSpacing:1}}>{p.label}</text>)}
     </svg>
   );
 }
 
-function GenreCloud({ genres }) {
-  const max=genres[0]?genres[0][1]:1;
-  return (
-    <div style={{display:"flex",flexWrap:"wrap",gap:10,lineHeight:1.4}}>
-      {genres.map(([name,count])=>{
-        const col=genreColor(name), size=11+(count/max)*12;
-        return <span key={name} style={{fontSize:size,color:col,fontFamily:"'Inter',sans-serif",fontWeight:400,opacity:0.55+(count/max)*0.45,letterSpacing:"0.3px",textShadow:"0 0 20px "+col+"40",cursor:"default"}}>{name}</span>;
-      })}
-    </div>
-  );
-}
-
-function ArtistRow({ artist, rank, isNew, isGone, extra }) {
-  const img=artist.images&&(artist.images[2]||artist.images[1]||artist.images[0]);
-  const pop=artist.popularity||0;
-  return (
-    <div className="artist-row" style={{display:"flex",alignItems:"center",gap:12,padding:"8px 10px",opacity:isGone?0.3:1}}>
-      <span style={{width:24,textAlign:"right",color:"#2a2a2a",fontSize:12,flexShrink:0,fontFamily:"'JetBrains Mono',monospace"}}>{rank}</span>
-      {img?<img src={img.url} alt="" style={{width:40,height:40,borderRadius:"50%",objectFit:"cover",flexShrink:0}}/>:<div style={{width:40,height:40,borderRadius:"50%",background:"#1a1a1a",flexShrink:0}}/>}
-      <div style={{flex:1,minWidth:0}}>
-        <div style={{fontSize:14,color:isGone?"#444":"#e0e0e0",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{artist.name}</div>
-        <div style={{fontSize:11,color:"#444",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontFamily:"'JetBrains Mono',monospace"}}>{artist.genres&&artist.genres.slice(0,2).join(" · ")}</div>
-      </div>
-      {extra && <div style={{fontSize:11,color:"#333",fontFamily:"'JetBrains Mono',monospace",flexShrink:0}}>#{extra}</div>}
-      <div style={{width:60,flexShrink:0}}>
-        <div style={{height:2,background:"#1a1a1a",borderRadius:1}}>
-          <div style={{height:"100%",width:pop+"%",background:"#1DB95460",borderRadius:1}}/>
-        </div>
-        <div style={{fontSize:9,color:"#2a2a2a",marginTop:2,fontFamily:"'JetBrains Mono',monospace",textAlign:"right"}}>{pop}</div>
-      </div>
-      {isNew&&<span style={{fontSize:9,color:"#1DB954",border:"1px solid #1DB95440",borderRadius:100,padding:"2px 8px",flexShrink:0,fontFamily:"'JetBrains Mono',monospace"}}>NEW</span>}
-      {isGone&&<span style={{fontSize:9,color:"#333",border:"1px solid #2a2a2a",borderRadius:100,padding:"2px 8px",flexShrink:0,fontFamily:"'JetBrains Mono',monospace"}}>FADED</span>}
-    </div>
-  );
-}
-
-function TrackRow({ track, rank }) {
-  const img=track.album&&track.album.images&&track.album.images[2];
-  const ms=track.duration_ms;
-  const dur=ms?Math.floor(ms/60000)+":"+String(Math.floor((ms%60000)/1000)).padStart(2,"0"):"";
-  const pop=track.popularity||0;
-  return (
-    <div className="artist-row" style={{display:"flex",alignItems:"center",gap:12,padding:"8px 10px"}}>
-      <span style={{width:24,textAlign:"right",color:"#2a2a2a",fontSize:12,flexShrink:0,fontFamily:"'JetBrains Mono',monospace"}}>{rank}</span>
-      {img?<img src={img.url} alt="" style={{width:40,height:40,borderRadius:4,objectFit:"cover",flexShrink:0}}/>:<div style={{width:40,height:40,borderRadius:4,background:"#1a1a1a",flexShrink:0}}/>}
-      <div style={{flex:1,minWidth:0}}>
-        <div style={{fontSize:14,color:"#e0e0e0",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{track.name}</div>
-        <div style={{fontSize:11,color:"#444",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontFamily:"'JetBrains Mono',monospace"}}>{track.artists&&track.artists.map(a=>a.name).join(", ")}</div>
-      </div>
-      <div style={{width:60,flexShrink:0}}>
-        <div style={{height:2,background:"#1a1a1a",borderRadius:1}}>
-          <div style={{height:"100%",width:pop+"%",background:"#1DB95460",borderRadius:1}}/>
-        </div>
-        <div style={{fontSize:9,color:"#2a2a2a",marginTop:2,fontFamily:"'JetBrains Mono',monospace",textAlign:"right"}}>{dur}</div>
-      </div>
-    </div>
-  );
-}
-
-function SectionLabel({ children }) {
-  return <div style={{fontSize:10,letterSpacing:"3px",textTransform:"uppercase",color:"#2a2a2a",marginBottom:18,fontFamily:"'JetBrains Mono',monospace",fontWeight:500}}>{children}</div>;
-}
-
-function Card({ children, style }) {
-  return <div style={{background:"#111",border:"1px solid #1a1a1a",borderRadius:10,padding:"20px 24px",...style}}>{children}</div>;
-}
-
-// ── MAIN APP ──────────────────────────────────────────────────────────────────
+// ── MAIN ──────────────────────────────────────────────────────────────────────
 function App() {
   const [token, setToken] = useState(null);
   const [phase, setPhase] = useState("init");
@@ -362,80 +354,78 @@ function App() {
   const [profile, setProfile] = useState(null);
   const [data, setData] = useState(null);
   const [audioFeatures, setAudioFeatures] = useState([]);
-  const [activeTab, setActiveTab] = useState("identity");
+  const [activeTab, setActiveTab] = useState("overview");
   const [timeRange, setTimeRange] = useState("long");
   const pollRef = useRef(null);
 
   useEffect(()=>{
     const params=new URLSearchParams(window.location.search);
     const code=params.get("code");
-    if (code) {
+    if(code){
       window.history.replaceState({},"",window.location.pathname);
       setPhase("loading");
       exchangeCode(code).then(t=>{
-        if (t) {
+        if(t){
           sessionStorage.setItem("sp_token",t);
-          if (window.opener) { try { window.opener.sessionStorage.setItem("sp_token",t); } catch(e){} window.close(); }
-          else { setToken(t); }
-        } else { setError("Token exchange failed."); setPhase("error"); }
+          if(window.opener){try{window.opener.sessionStorage.setItem("sp_token",t);}catch(e){} window.close();}
+          else{setToken(t);}
+        } else {setError("Token exchange failed.");setPhase("error");}
       });
       return;
     }
     const stored=sessionStorage.getItem("sp_token");
-    if (stored) { setToken(stored); setPhase("ready"); }
+    if(stored){setToken(stored);setPhase("ready");}
     else setPhase("login");
   },[]);
 
-  function startPolling() {
-    if (pollRef.current) clearInterval(pollRef.current);
+  function startPolling(){
+    if(pollRef.current) clearInterval(pollRef.current);
     pollRef.current=setInterval(()=>{
       const t=sessionStorage.getItem("sp_token");
-      if (t) { clearInterval(pollRef.current); setToken(t); setPhase("ready"); }
+      if(t){clearInterval(pollRef.current);setToken(t);setPhase("ready");}
     },600);
   }
 
   useEffect(()=>{
-    if (!token||data) return;
+    if(!token||data) return;
     setPhase("loading");
     Promise.all([
       sGet("/me",token),
       fetchAllRanges("artists",token),
       fetchAllRanges("tracks",token),
-    ]).then(async ([prof,artists,tracks])=>{
+    ]).then(async([prof,artists,tracks])=>{
       setProfile(prof);
-      // Fetch audio features for long-term top tracks
-      const trackIds=(tracks.long||[]).map(t=>t.id);
       let features=[];
-      try { features=await fetchAudioFeatures(trackIds,token); } catch(e){}
+      try{features=await fetchAudioFeatures((tracks.long||[]).map(t=>t.id),token);}catch(e){}
       setAudioFeatures(features);
       setData({artists,tracks});
       setPhase("ready");
     }).catch(e=>{
-      if (e.message==="401") { sessionStorage.removeItem("sp_token"); setToken(null); setPhase("login"); }
-      else { setError("Failed to load data: "+e.message); setPhase("error"); }
+      if(e.message==="401"){sessionStorage.removeItem("sp_token");setToken(null);setPhase("login");}
+      else{setError("Failed to load: "+e.message);setPhase("error");}
     });
   },[token]);
 
-  function logout() { sessionStorage.removeItem("sp_token"); setToken(null); setData(null); setProfile(null); setPhase("login"); }
-  async function handleConnect() { await doAuth(); startPolling(); }
+  function logout(){sessionStorage.removeItem("sp_token");setToken(null);setData(null);setProfile(null);setPhase("login");}
+  async function handleConnect(){await doAuth();startPolling();}
 
-  if (phase==="init"||phase==="loading") return <Loader msg={phase==="init"?"initialising":"digging through your crates"}/>;
-  if (phase==="error") return <div style={{minHeight:"100vh",background:"#0c0c0c",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}><p style={{color:"#ff5555"}}>{error}</p><button style={btnS} onClick={()=>setPhase("login")}>Retry</button></div>;
-  if (phase==="login") return (
-    <div style={{minHeight:"100vh",background:"#0c0c0c",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
-      <div style={{textAlign:"center",animation:"fadeUp 0.5s ease",maxWidth:380}}>
-        <div style={{fontSize:44,marginBottom:24,color:"#1DB954",fontFamily:"'Playfair Display',serif"}}>◈</div>
-        <h1 style={{fontSize:36,fontWeight:400,color:"#e8e8e8",margin:"0 0 12px",fontFamily:"'Playfair Display',serif",letterSpacing:"-0.5px"}}>Cratelog</h1>
-        <p style={{color:"#444",fontSize:14,lineHeight:1.7,marginBottom:36,fontFamily:"'Inter',sans-serif"}}>Map how your music has evolved.<br/>Understand the sound that defines you.</p>
+  if(phase==="init"||phase==="loading") return <Loader msg={phase==="init"?"initialising":"loading your data"}/>;
+  if(phase==="error") return <div style={{minHeight:"100vh",background:C.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}><p style={{color:"#c00"}}>{error}</p><button style={btnS} onClick={()=>setPhase("login")}>Retry</button></div>;
+
+  if(phase==="login") return (
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{textAlign:"center",animation:"fadeUp 0.4s ease",maxWidth:400,border:"1px solid "+C.borderDark,padding:"48px 40px",background:C.bgCard}}>
+        <div style={{fontSize:11,letterSpacing:"3px",textTransform:"uppercase",fontFamily:"'IBM Plex Mono',monospace",color:C.textLight,marginBottom:20}}>cratelog</div>
+        <h1 style={{fontSize:32,fontWeight:600,color:C.text,margin:"0 0 14px",fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"-1px"}}>Your Music,<br/>Mapped.</h1>
+        <p style={{color:C.textMid,fontSize:14,lineHeight:1.7,marginBottom:32}}>Top artists, genre archaeology,<br/>mood analysis, taste evolution.</p>
         <button style={btnS} onClick={handleConnect}>Connect Spotify</button>
-        <p style={{color:"#222",fontSize:11,marginTop:14,fontFamily:"'JetBrains Mono',monospace",letterSpacing:1}}>OPENS A POPUP</p>
+        <p style={{color:C.textLight,fontSize:11,marginTop:14,fontFamily:"'IBM Plex Mono',monospace"}}>opens a popup window</p>
       </div>
     </div>
   );
 
-  if (!data) return <Loader msg="loading"/>;
+  if(!data) return <Loader msg="loading"/>;
 
-  // Derived
   const artists = data.artists[timeRange];
   const tracks = data.tracks[timeRange];
   const longGenres = aggregateGenres(data.artists.long);
@@ -447,336 +437,373 @@ function App() {
   const obsScore = obscurityScore(data.artists.long);
   const obsLabel = obscurityLabel(obsScore);
 
-  // Audio features averages
-  const featMap = {};
-  audioFeatures.forEach(f=>{ if(f) featMap[f.id]=f; });
-  const featValues = data.tracks.long.slice(0,50).map(t=>featMap[t.id]).filter(Boolean);
-  const avgFeatures = {
-    energy: avg(featValues.map(f=>f.energy)),
-    valence: avg(featValues.map(f=>f.valence)),
-    danceability: avg(featValues.map(f=>f.danceability)),
-    acousticness: avg(featValues.map(f=>f.acousticness)),
-    instrumentalness: avg(featValues.map(f=>f.instrumentalness)),
-    speechiness: avg(featValues.map(f=>f.speechiness)),
+  const fm={};
+  audioFeatures.forEach(f=>{if(f)fm[f.id]=f;});
+  const fv=data.tracks.long.slice(0,50).map(t=>fm[t.id]).filter(Boolean);
+  const af={
+    energy:avg(fv.map(f=>f.energy)),
+    valence:avg(fv.map(f=>f.valence)),
+    danceability:avg(fv.map(f=>f.danceability)),
+    acousticness:avg(fv.map(f=>f.acousticness)),
+    instrumentalness:avg(fv.map(f=>f.instrumentalness)),
+    speechiness:avg(fv.map(f=>f.speechiness)),
   };
-  const avgTempo = avg(featValues.map(f=>f.tempo));
-
-  const vibes = {
-    "Energy": Math.round(avgFeatures.energy*10)||5,
-    "Mood": Math.round(avgFeatures.valence*10)||4,
-    "Dance": Math.round(avgFeatures.danceability*10)||4,
-    "Acoustic": Math.round(avgFeatures.acousticness*10)||3,
-    "Instrum.": Math.round(avgFeatures.instrumentalness*10)||3,
+  const avgTempo=avg(fv.map(f=>f.tempo));
+  const vibes={
+    "Energy":Math.round((af.energy||0.5)*10),
+    "Mood":Math.round((af.valence||0.4)*10),
+    "Dance":Math.round((af.danceability||0.4)*10),
+    "Acoustic":Math.round((af.acousticness||0.3)*10),
+    "Instrum":Math.round((af.instrumentalness||0.3)*10),
   };
 
   const tabs=[
-    {id:"identity",label:"Identity"},
-    {id:"evolution",label:"Evolution"},
+    {id:"overview",label:"Overview"},
+    {id:"artists",label:"Artists"},
+    {id:"tracks",label:"Tracks"},
     {id:"genres",label:"Genres"},
     {id:"mood",label:"Mood Map"},
     {id:"audio",label:"Audio DNA"},
-    {id:"tracks",label:"Top Tracks"},
+    {id:"evolution",label:"Evolution"},
   ];
-
-  const timeRanges=[["short","4 Weeks"],["medium","6 Months"],["long","All Time"]];
+  const trLabels={"short":"4 Weeks","medium":"6 Months","long":"All Time"};
 
   return (
-    <div style={{minHeight:"100vh",background:"#0c0c0c",display:"flex",flexDirection:"column"}}>
+    <div style={{minHeight:"100vh",background:C.bg}}>
 
-      {/* Top nav */}
-      <header style={{borderBottom:"1px solid #141414",padding:"0 32px",display:"flex",alignItems:"center",justifyContent:"space-between",height:56,position:"sticky",top:0,background:"#0c0c0cee",backdropFilter:"blur(12px)",zIndex:100}}>
+      {/* Header */}
+      <div style={{background:C.bgCard,borderBottom:"2px solid "+C.borderDark,padding:"0 32px",display:"flex",alignItems:"center",justifyContent:"space-between",height:50,position:"sticky",top:0,zIndex:100}}>
+        <div style={{display:"flex",alignItems:"center",gap:20}}>
+          <span style={{fontSize:13,color:C.text,fontFamily:"'IBM Plex Mono',monospace",fontWeight:600,letterSpacing:"1px"}}>CRATELOG</span>
+          <span style={{color:C.border}}>|</span>
+          <span style={{fontSize:12,color:C.textMid,fontFamily:"'IBM Plex Mono',monospace"}}>{profile&&profile.display_name}</span>
+        </div>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <span style={{color:"#1DB954",fontSize:18,fontFamily:"'Playfair Display',serif"}}>◈</span>
-          <span style={{fontSize:13,color:"#e8e8e8",fontFamily:"'Playfair Display',serif",fontWeight:600,letterSpacing:"0.5px"}}>Cratelog</span>
-          {profile&&<span style={{fontSize:12,color:"#2a2a2a",fontFamily:"'JetBrains Mono',monospace",marginLeft:8}}>/ {profile.display_name}</span>}
+          <span style={{fontSize:11,color:C.textLight,fontFamily:"'IBM Plex Mono',monospace"}}>range:</span>
+          {Object.entries(trLabels).map(([v,l])=>(
+            <button key={v} onClick={()=>setTimeRange(v)} className="tab-hover"
+              style={{background:"none",border:timeRange===v?"1px solid "+C.borderDark:"1px solid transparent",color:timeRange===v?C.text:C.textLight,padding:"3px 10px",fontSize:11,cursor:"pointer",fontFamily:"'IBM Plex Mono',monospace",borderRadius:2,transition:"all 0.1s"}}>
+              {l}
+            </button>
+          ))}
+          <span style={{color:C.border}}>|</span>
+          <button onClick={logout} className="tab-hover" style={{background:"none",border:"none",color:C.textLight,fontSize:11,cursor:"pointer",fontFamily:"'IBM Plex Mono',monospace"}}>disconnect</button>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:24}}>
-          <div style={{display:"flex",gap:2,background:"#111",border:"1px solid #1a1a1a",borderRadius:6,padding:3}}>
-            {timeRanges.map(([v,l])=>(
-              <button key={v} onClick={()=>setTimeRange(v)} style={{background:timeRange===v?"#1a1a1a":"transparent",border:"none",color:timeRange===v?"#e8e8e8":"#333",padding:"4px 12px",borderRadius:4,fontSize:11,cursor:"pointer",fontFamily:"'JetBrains Mono',monospace",letterSpacing:1,transition:"all 0.15s"}}>{l}</button>
-            ))}
-          </div>
-          <button onClick={logout} style={{background:"none",border:"1px solid #1a1a1a",color:"#333",borderRadius:6,padding:"5px 14px",fontSize:11,cursor:"pointer",fontFamily:"'JetBrains Mono',monospace",letterSpacing:1}}>DISCONNECT</button>
-        </div>
-      </header>
+      </div>
 
       {/* Tab bar */}
-      <div style={{borderBottom:"1px solid #141414",padding:"0 32px",display:"flex",gap:0,background:"#0c0c0c"}}>
+      <div style={{background:C.bgCard,borderBottom:"1px solid "+C.border,padding:"0 32px",display:"flex",gap:0}}>
         {tabs.map(t=>(
-          <button key={t.id} className="tab-btn" onClick={()=>setActiveTab(t.id)}
-            style={{background:"none",border:"none",color:activeTab===t.id?"#e8e8e8":"#333",padding:"14px 20px",fontSize:12,cursor:"pointer",letterSpacing:"1.5px",textTransform:"uppercase",fontFamily:"'JetBrains Mono',monospace",borderBottom:activeTab===t.id?"2px solid #1DB954":"2px solid transparent",marginBottom:-1}}>
+          <button key={t.id} className="tab-hover" onClick={()=>setActiveTab(t.id)}
+            style={{background:"none",border:"none",borderBottom:activeTab===t.id?"2px solid "+C.text:"2px solid transparent",color:activeTab===t.id?C.text:C.textLight,padding:"10px 16px",fontSize:12,cursor:"pointer",letterSpacing:"1px",textTransform:"uppercase",fontFamily:"'IBM Plex Mono',monospace",marginBottom:-1,transition:"color 0.1s"}}>
             {t.label}
           </button>
         ))}
       </div>
 
-      {/* Main content — two-column layout */}
-      <main style={{flex:1,padding:"32px 32px 64px",maxWidth:1280,width:"100%",margin:"0 auto"}}>
+      {/* Content */}
+      <div style={{padding:"28px 32px 64px",maxWidth:1320,margin:"0 auto"}}>
 
-        {/* ── IDENTITY ── */}
-        {activeTab==="identity" && (
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
-            {/* Left col: stats overview */}
+        {/* OVERVIEW */}
+        {activeTab==="overview" && (
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
             <div style={{display:"flex",flexDirection:"column",gap:20}}>
-              <Card>
-                <SectionLabel>Taste Profile</SectionLabel>
-                <div style={{display:"flex",flexWrap:"wrap",gap:12,marginBottom:24}}>
-                  <StatPill label="Obscurity" value={obsScore+"%"} color="#1DB954"/>
-                  <StatPill label="Label" value={obsLabel} color="#e8e8e8"/>
-                  <StatPill label="Top Artists" value={data.artists.long.length}/>
-                  <StatPill label="Avg Popularity" value={Math.round(avg(data.artists.long.map(a=>a.popularity||50)))}/>
-                </div>
-                <SectionLabel>Listening Personality</SectionLabel>
-                <div style={{display:"flex",justifyContent:"center",paddingTop:8}}>
+              {/* Stats row */}
+              <Panel>
+                <SLabel>Stats · {trLabels[timeRange]}</SLabel>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,fontFamily:"'IBM Plex Mono',monospace"}}>
+                  <tbody>
+                    {[
+                      ["Obscurity Score",obsScore+"% — "+obsLabel],
+                      ["Top Artist",artists[0]&&artists[0].name],
+                      ["Avg Popularity",Math.round(avg(data.artists.long.map(a=>a.popularity||50)))+"/100"],
+                      ["Unique Genres",longGenres.length],
+                      ["New This Period",newArtists.length+" artists"],
+                      ...(avgTempo?[["Avg BPM",Math.round(avgTempo)]]:[] ),
+                      ...(af.energy?[["Avg Energy",Math.round(af.energy*100)+"%"]]:[] ),
+                    ].map(([k,v])=>(
+                      <tr key={k} style={{borderBottom:"1px solid "+C.border}}>
+                        <td style={{padding:"7px 0",color:C.textMid,width:"45%"}}>{k}</td>
+                        <td style={{padding:"7px 0",color:C.text,fontWeight:500}}>{v}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Panel>
+              <Panel>
+                <SLabel>Genre Universe</SLabel>
+                <GenreCloud genres={longGenres.slice(0,20)}/>
+              </Panel>
+              <Panel>
+                <SLabel>Personality Radar</SLabel>
+                <div style={{display:"flex",justifyContent:"center",padding:"8px 0"}}>
                   <RadarChart data={vibes}/>
                 </div>
-              </Card>
-              <Card>
-                <SectionLabel>Top Artists · {timeRange==="short"?"4 Weeks":timeRange==="medium"?"6 Months":"All Time"}</SectionLabel>
-                {artists.slice(0,8).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1}/>)}
-              </Card>
+              </Panel>
             </div>
-            {/* Right col: text analysis */}
             <div style={{display:"flex",flexDirection:"column",gap:20}}>
-              <Card>
-                <SectionLabel>Sound Portrait</SectionLabel>
+              <Panel>
+                <SLabel>Sound Portrait</SLabel>
                 {identitySections.map((s,i)=>(
-                  <div key={i} style={{marginBottom:28}}>
-                    <div style={{fontSize:9,letterSpacing:"2px",textTransform:"uppercase",color:"#1DB954",marginBottom:10,fontFamily:"'JetBrains Mono',monospace"}}>{s.title}</div>
-                    <p style={{color:"#888",fontSize:14,lineHeight:1.85,margin:0,fontFamily:"'Playfair Display',serif"}}>{s.body}</p>
+                  <div key={i} style={{marginBottom:22}}>
+                    <div style={{fontSize:10,letterSpacing:"2px",textTransform:"uppercase",color:C.textLight,marginBottom:7,fontFamily:"'IBM Plex Mono',monospace"}}>{s.title}</div>
+                    <p style={{color:C.textMid,fontSize:14,lineHeight:1.85,margin:0}}>{s.body}</p>
                   </div>
                 ))}
-              </Card>
+              </Panel>
+              <Panel>
+                <SLabel>Top Artists · {trLabels[timeRange]}</SLabel>
+                {artists.slice(0,8).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1}/>)}
+              </Panel>
             </div>
           </div>
         )}
 
-        {/* ── EVOLUTION ── */}
-        {activeTab==="evolution" && (
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
-            <div style={{display:"flex",flexDirection:"column",gap:20}}>
-              {newArtists.length>0&&(
-                <Card>
-                  <SectionLabel>Recently Emerged</SectionLabel>
-                  <p style={{fontSize:12,color:"#333",marginBottom:16,fontFamily:"'JetBrains Mono',monospace",lineHeight:1.6}}>New to your rotation in the last 4 weeks</p>
-                  {newArtists.slice(0,10).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1} isNew={true}/>)}
-                </Card>
-              )}
-              {fadedArtists.length>0&&(
-                <Card>
-                  <SectionLabel>Fading From Rotation</SectionLabel>
-                  {fadedArtists.slice(0,8).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1} isGone={true}/>)}
-                </Card>
-              )}
-            </div>
-            <div style={{display:"flex",flexDirection:"column",gap:20}}>
-              <Card>
-                <SectionLabel>Long-Term Constants</SectionLabel>
-                <p style={{fontSize:12,color:"#333",marginBottom:16,fontFamily:"'JetBrains Mono',monospace",lineHeight:1.6}}>{stableArtists.length} artists in both your all-time and recent top 20</p>
-                {stableArtists.slice(0,10).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1}/>)}
-              </Card>
-              <Card>
-                <SectionLabel>Genre Shift</SectionLabel>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginTop:8}}>
-                  <div>
-                    <div style={{fontSize:9,color:"#2a2a2a",letterSpacing:2,marginBottom:12,fontFamily:"'JetBrains Mono',monospace"}}>ALL TIME</div>
-                    <GenreCloud genres={longGenres.slice(0,10)}/>
-                  </div>
-                  <div>
-                    <div style={{fontSize:9,color:"#1DB954",letterSpacing:2,marginBottom:12,fontFamily:"'JetBrains Mono',monospace"}}>RECENT</div>
-                    <GenreCloud genres={shortGenres.slice(0,10)}/>
-                  </div>
-                </div>
-              </Card>
-            </div>
+        {/* ARTISTS */}
+        {activeTab==="artists" && (
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+            <Panel>
+              <SLabel>Top 25 Artists · {trLabels[timeRange]}</SLabel>
+              {artists.slice(0,25).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1}/>)}
+            </Panel>
+            <Panel>
+              <SLabel>Top 25–50 Artists</SLabel>
+              {artists.slice(25,50).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+26}/>)}
+            </Panel>
           </div>
         )}
 
-        {/* ── GENRES ── */}
+        {/* TRACKS */}
+        {activeTab==="tracks" && (
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+            <Panel>
+              <SLabel>Top 25 Tracks · {trLabels[timeRange]}</SLabel>
+              {tracks.slice(0,25).map((t,i)=><TrackRow key={t.id+i} track={t} rank={i+1}/>)}
+            </Panel>
+            <Panel>
+              <SLabel>Top 25–50 Tracks</SLabel>
+              {tracks.slice(25,50).map((t,i)=><TrackRow key={t.id+i} track={t} rank={i+26}/>)}
+            </Panel>
+          </div>
+        )}
+
+        {/* GENRES */}
         {activeTab==="genres" && (
-          <div style={{display:"grid",gridTemplateColumns:"3fr 2fr",gap:24}}>
+          <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:20}}>
             <div style={{display:"flex",flexDirection:"column",gap:20}}>
-              <Card>
-                <SectionLabel>Genre Universe</SectionLabel>
+              <Panel>
+                <SLabel>All Genres — Cloud View</SLabel>
                 <GenreCloud genres={longGenres}/>
-              </Card>
-              <Card>
-                <SectionLabel>Genre Frequency</SectionLabel>
+              </Panel>
+              <Panel>
+                <SLabel>Genre Frequency — All Time</SLabel>
                 {longGenres.map(([name,count],i)=>{
                   const max=longGenres[0][1];
                   return (
-                    <div key={name} style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
-                      <span style={{width:18,fontSize:11,color:"#2a2a2a",textAlign:"right",fontFamily:"'JetBrains Mono',monospace",flexShrink:0}}>{i+1}</span>
+                    <div key={name} style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                      <span style={{width:20,fontSize:11,color:C.textLight,textAlign:"right",fontFamily:"'IBM Plex Mono',monospace",flexShrink:0}}>{i+1}</span>
                       <div style={{flex:1}}>
                         <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                          <span style={{fontSize:13,color:"#888"}}>{name}</span>
-                          <span style={{fontSize:11,color:"#2a2a2a",fontFamily:"'JetBrains Mono',monospace"}}>{count}</span>
+                          <span style={{fontSize:13,color:C.text}}>{name}</span>
+                          <span style={{fontSize:11,color:C.textLight,fontFamily:"'IBM Plex Mono',monospace"}}>{count}</span>
                         </div>
-                        <div style={{height:2,background:"#1a1a1a",borderRadius:1}}>
-                          <div style={{height:"100%",width:((count/max)*100)+"%",background:genreColor(name),borderRadius:1}}/>
+                        <div style={{height:2,background:C.border,borderRadius:1}}>
+                          <div style={{height:"100%",width:((count/max)*100)+"%",background:C.text,borderRadius:1}}/>
                         </div>
                       </div>
                     </div>
                   );
                 })}
-              </Card>
+              </Panel>
             </div>
-            <div>
-              <Card>
-                <SectionLabel>Obscurity Score</SectionLabel>
-                <div style={{textAlign:"center",padding:"24px 0"}}>
-                  <div style={{fontSize:72,fontWeight:600,color:"#1DB954",fontFamily:"'Playfair Display',serif",lineHeight:1}}>{obsScore}</div>
-                  <div style={{fontSize:14,color:"#888",marginTop:8,fontFamily:"'Playfair Display',serif",fontStyle:"italic"}}>{obsLabel}</div>
-                  <div style={{fontSize:11,color:"#2a2a2a",marginTop:16,fontFamily:"'JetBrains Mono',monospace",lineHeight:1.6}}>
-                    Based on avg artist popularity<br/>score of {Math.round(avg(data.artists.long.map(a=>a.popularity||50)))} / 100
+            <div style={{display:"flex",flexDirection:"column",gap:20}}>
+              <Panel>
+                <SLabel>Obscurity Score</SLabel>
+                <div style={{textAlign:"center",padding:"24px 0 20px"}}>
+                  <div style={{fontSize:64,fontWeight:600,color:C.text,fontFamily:"'IBM Plex Mono',monospace",lineHeight:1}}>{obsScore}</div>
+                  <div style={{fontSize:13,color:C.textMid,marginTop:8,fontFamily:"'IBM Plex Mono',monospace"}}>{obsLabel}</div>
+                  <div style={{fontSize:11,color:C.textLight,marginTop:12,lineHeight:1.6,fontFamily:"'IBM Plex Mono',monospace"}}>avg artist popularity:<br/>{Math.round(avg(data.artists.long.map(a=>a.popularity||50)))}/100</div>
+                </div>
+                <Divider/>
+                {[["Deep Underground","80+"],["Mostly Niche","65–79"],["Indie Adjacent","50–64"],["Mainstream Aware","35–49"],["Chart Familiar","0–34"]].map(([label,range])=>(
+                  <div key={label} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid "+C.border,background:obsLabel===label?"#d8d6d0":"transparent",margin:"0 -6px",paddingLeft:6,paddingRight:6}}>
+                    <span style={{fontSize:12,color:obsLabel===label?C.text:C.textLight,fontWeight:obsLabel===label?600:400,fontFamily:"'IBM Plex Mono',monospace"}}>{obsLabel===label?"▶ ":""}{label}</span>
+                    <span style={{fontSize:11,color:C.textLight,fontFamily:"'IBM Plex Mono',monospace"}}>{range}</span>
                   </div>
-                </div>
-                <div style={{marginTop:16}}>
-                  {[["Deep Underground","80+"],["Mostly Niche","65–79"],["Indie Adjacent","50–64"],["Mainstream Aware","35–49"],["Chart Familiar","0–34"]].map(([label,range])=>(
-                    <div key={label} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #141414"}}>
-                      <span style={{fontSize:12,color:obsLabel===label?"#e8e8e8":"#2a2a2a",fontWeight:obsLabel===label?500:400}}>{label}</span>
-                      <span style={{fontSize:11,color:"#2a2a2a",fontFamily:"'JetBrains Mono',monospace"}}>{range}</span>
-                    </div>
-                  ))}
-                </div>
-              </Card>
+                ))}
+              </Panel>
+              <Panel>
+                <SLabel>Recent Genre Shift</SLabel>
+                <div style={{fontSize:10,color:C.textLight,marginBottom:10,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:1}}>RECENT (4 WKS)</div>
+                <GenreCloud genres={shortGenres.slice(0,14)}/>
+                <Divider/>
+                <div style={{fontSize:10,color:C.textLight,marginBottom:10,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:1}}>ALL TIME</div>
+                <GenreCloud genres={longGenres.slice(0,14)}/>
+              </Panel>
             </div>
           </div>
         )}
 
-        {/* ── MOOD MAP ── */}
+        {/* MOOD MAP */}
         {activeTab==="mood" && (
-          <div style={{display:"grid",gridTemplateColumns:"3fr 2fr",gap:24}}>
-            <Card>
-              <SectionLabel>Mood Map · Top 40 Tracks</SectionLabel>
-              <p style={{fontSize:12,color:"#333",marginBottom:20,fontFamily:"'JetBrains Mono',monospace",lineHeight:1.6}}>Each dot is a track — hover to identify. X axis = energy, Y axis = valence (mood).</p>
+          <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:20,alignItems:"start"}}>
+            <Panel style={{display:"inline-block"}}>
+              <SLabel>Mood Map · Top 50 Tracks</SLabel>
+              <div style={{fontSize:11,color:C.textLight,marginBottom:14,fontFamily:"'IBM Plex Mono',monospace"}}>hover each point to identify track</div>
               {audioFeatures.length>0
-                ? <MoodMap tracks={data.tracks.long} features={audioFeatures}/>
-                : <div style={{padding:"40px 0",textAlign:"center",color:"#333",fontFamily:"'JetBrains Mono',monospace",fontSize:12}}>Audio features unavailable</div>
+                ?<MoodMap tracks={data.tracks.long} features={audioFeatures}/>
+                :<div style={{padding:"40px 20px",textAlign:"center",color:C.textLight,fontFamily:"'IBM Plex Mono',monospace",fontSize:12}}>audio features unavailable</div>
               }
-            </Card>
+            </Panel>
             <div style={{display:"flex",flexDirection:"column",gap:20}}>
-              <Card>
-                <SectionLabel>Mood Summary</SectionLabel>
-                {avgFeatures.energy>0 && (
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:20}}>
-                    <StatPill label="Energy" value={Math.round(avgFeatures.energy*100)+"%"} color={avgFeatures.energy>0.6?"#f59e0b":"#1DB954"}/>
-                    <StatPill label="Positivity" value={Math.round(avgFeatures.valence*100)+"%"} color={avgFeatures.valence>0.5?"#1DB954":"#888"}/>
-                    <StatPill label="Dance" value={Math.round(avgFeatures.danceability*100)+"%"}/>
-                    <StatPill label="BPM" value={avgTempo?Math.round(avgTempo):"—"}/>
-                  </div>
-                )}
-                <div style={{fontSize:13,color:"#555",fontFamily:"'Playfair Display',serif",fontStyle:"italic",lineHeight:1.7}}>
-                  {avgFeatures.energy>0.65&&avgFeatures.valence>0.5?"High energy and generally positive — music that pushes forward.":
-                   avgFeatures.energy>0.65&&avgFeatures.valence<0.5?"Intense but melancholic — music with teeth and darkness.":
-                   avgFeatures.energy<0.45&&avgFeatures.valence>0.5?"Calm and warm — music for focus and reflection.":
-                   avgFeatures.energy<0.45&&avgFeatures.valence<0.5?"Slow, introspective, and heavy. Music that sits in the shadow.":
-                   "Balanced between light and dark, calm and intense."}
-                </div>
-              </Card>
-              <Card>
-                <SectionLabel>Quadrant Breakdown</SectionLabel>
-                {audioFeatures.length>0 && (() => {
-                  const featureMap={};
-                  audioFeatures.forEach(f=>{if(f)featureMap[f.id]=f;});
-                  const pts=data.tracks.long.slice(0,40).map(t=>featureMap[t.id]).filter(Boolean);
-                  const q={euphoric:0,turbulent:0,serene:0,brooding:0};
-                  pts.forEach(f=>{
-                    if(f.energy>0.5&&f.valence>0.5) q.euphoric++;
-                    else if(f.energy>0.5&&f.valence<0.5) q.turbulent++;
-                    else if(f.energy<0.5&&f.valence>0.5) q.serene++;
-                    else q.brooding++;
+              <Panel>
+                <SLabel>Quadrant Breakdown</SLabel>
+                {audioFeatures.length>0&&(()=>{
+                  const q={EUPHORIC:0,TURBULENT:0,SERENE:0,BROODING:0};
+                  data.tracks.long.slice(0,50).forEach(t=>{
+                    const f=fm[t.id]; if(!f) return;
+                    if(f.energy>0.5&&f.valence>0.5) q.EUPHORIC++;
+                    else if(f.energy>0.5&&f.valence<0.5) q.TURBULENT++;
+                    else if(f.energy<0.5&&f.valence>0.5) q.SERENE++;
+                    else q.BROODING++;
                   });
-                  const total=pts.length||1;
-                  return Object.entries(q).map(([k,v])=>(
-                    <div key={k} style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
-                      <span style={{width:70,fontSize:11,color:"#555",textTransform:"uppercase",letterSpacing:1,fontFamily:"'JetBrains Mono',monospace",flexShrink:0}}>{k}</span>
-                      <div style={{flex:1,height:2,background:"#1a1a1a",borderRadius:1}}>
-                        <div style={{height:"100%",width:((v/total)*100)+"%",background:"#1DB954",borderRadius:1}}/>
+                  const total=Object.values(q).reduce((a,b)=>a+b,0)||1;
+                  return Object.entries(q).sort((a,b)=>b[1]-a[1]).map(([k,v])=>(
+                    <div key={k} style={{marginBottom:12}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                        <span style={{fontSize:12,color:C.text,fontFamily:"'IBM Plex Mono',monospace"}}>{k}</span>
+                        <span style={{fontSize:12,color:C.textLight,fontFamily:"'IBM Plex Mono',monospace"}}>{v} tracks · {Math.round((v/total)*100)}%</span>
                       </div>
-                      <span style={{width:28,fontSize:11,color:"#333",textAlign:"right",fontFamily:"'JetBrains Mono',monospace"}}>{Math.round((v/total)*100)}%</span>
+                      <div style={{height:3,background:C.border,borderRadius:1}}>
+                        <div style={{height:"100%",width:((v/total)*100)+"%",background:C.text,borderRadius:1}}/>
+                      </div>
                     </div>
                   ));
                 })()}
-              </Card>
+              </Panel>
+              <Panel>
+                <SLabel>Mood Summary</SLabel>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,fontFamily:"'IBM Plex Mono',monospace"}}>
+                  <tbody>
+                    {af.energy&&[
+                      ["Avg Energy",Math.round(af.energy*100)+"%"],
+                      ["Avg Positivity",Math.round(af.valence*100)+"%"],
+                      ["Avg Danceability",Math.round(af.danceability*100)+"%"],
+                      ["Avg BPM",avgTempo?Math.round(avgTempo):"—"],
+                      ["Mood Tone",af.valence>0.5?"Positive / Bright":"Dark / Introspective"],
+                    ].map(([k,v])=>(
+                      <tr key={k} style={{borderBottom:"1px solid "+C.border}}>
+                        <td style={{padding:"7px 0",color:C.textMid}}>{k}</td>
+                        <td style={{padding:"7px 0",color:C.text,fontWeight:500,textAlign:"right"}}>{v}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Panel>
             </div>
           </div>
         )}
 
-        {/* ── AUDIO DNA ── */}
+        {/* AUDIO DNA */}
         {activeTab==="audio" && (
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
-            <Card>
-              <SectionLabel>Audio Features · All-Time Top 50</SectionLabel>
-              {avgFeatures.energy>0 ? (
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+            <Panel>
+              <SLabel>Audio Features · All-Time Top 50</SLabel>
+              {af.energy>0?(
                 <div>
-                  <FeatureBar label="Energy" value={avgFeatures.energy} color="#f59e0b"/>
-                  <FeatureBar label="Valence (Positivity)" value={avgFeatures.valence} color="#1DB954"/>
-                  <FeatureBar label="Danceability" value={avgFeatures.danceability} color="#3b82f6"/>
-                  <FeatureBar label="Acousticness" value={avgFeatures.acousticness} color="#8b5cf6"/>
-                  <FeatureBar label="Instrumentalness" value={avgFeatures.instrumentalness} color="#ec4899"/>
-                  <FeatureBar label="Speechiness" value={avgFeatures.speechiness} color="#14b8a6"/>
-                  <div style={{marginTop:20,padding:"16px 0",borderTop:"1px solid #1a1a1a",display:"flex",gap:16}}>
-                    <StatPill label="Avg BPM" value={avgTempo?Math.round(avgTempo):"—"}/>
-                    <StatPill label="Energy" value={Math.round(avgFeatures.energy*100)+"%"} color="#f59e0b"/>
-                    <StatPill label="Mood" value={avgFeatures.valence>0.5?"Positive":"Dark"} color={avgFeatures.valence>0.5?"#1DB954":"#888"}/>
-                  </div>
+                  <FeatureBar label="Energy" value={af.energy}/>
+                  <FeatureBar label="Valence (Positivity)" value={af.valence}/>
+                  <FeatureBar label="Danceability" value={af.danceability}/>
+                  <FeatureBar label="Acousticness" value={af.acousticness}/>
+                  <FeatureBar label="Instrumentalness" value={af.instrumentalness}/>
+                  <FeatureBar label="Speechiness" value={af.speechiness}/>
+                  <Divider/>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,fontFamily:"'IBM Plex Mono',monospace"}}>
+                    <tbody>
+                      {[["Avg BPM",Math.round(avgTempo)||"—"],["Dominant Mood",af.valence>0.5?"Positive":"Dark"],["Energy Level",af.energy>0.6?"High":af.energy>0.4?"Medium":"Low"]].map(([k,v])=>(
+                        <tr key={k} style={{borderBottom:"1px solid "+C.border}}>
+                          <td style={{padding:"7px 0",color:C.textMid}}>{k}</td>
+                          <td style={{padding:"7px 0",color:C.text,fontWeight:500,textAlign:"right"}}>{v}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              ) : (
-                <div style={{padding:"40px 0",textAlign:"center",color:"#333",fontFamily:"'JetBrains Mono',monospace",fontSize:12}}>Audio features unavailable</div>
-              )}
-            </Card>
+              ):<div style={{padding:"32px 0",textAlign:"center",color:C.textLight,fontFamily:"'IBM Plex Mono',monospace",fontSize:12}}>audio features unavailable</div>}
+            </Panel>
             <div style={{display:"flex",flexDirection:"column",gap:20}}>
-              <Card>
-                <SectionLabel>Personality Radar</SectionLabel>
-                <div style={{display:"flex",justifyContent:"center",paddingTop:8}}>
+              <Panel>
+                <SLabel>Personality Radar</SLabel>
+                <div style={{display:"flex",justifyContent:"center",padding:"8px 0"}}>
                   <RadarChart data={vibes}/>
                 </div>
-              </Card>
-              <Card>
-                <SectionLabel>What The Numbers Say</SectionLabel>
-                <div style={{display:"flex",flexDirection:"column",gap:12}}>
+              </Panel>
+              <Panel>
+                <SLabel>Interpretation</SLabel>
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
                   {[
-                    avgFeatures.instrumentalness>0.4 && "High instrumentalness — you lean toward music where sound does the talking, not lyrics.",
-                    avgFeatures.acousticness>0.4 && "Significant acousticness — organic instrumentation holds real weight in your rotation.",
-                    avgFeatures.energy>0.7 && "High energy across the board — your music moves, even when it's experimental.",
-                    avgFeatures.energy<0.4 && "Low average energy — you gravitate toward restrained, textured, or atmospheric sound.",
-                    avgFeatures.danceability>0.65 && "Strong danceability — rhythm and groove are central to your taste.",
-                    avgFeatures.valence<0.35 && "Low valence — emotionally, your music skews dark and introspective.",
-                    avgFeatures.valence>0.65 && "High valence — your taste tends toward the euphoric and uplifting.",
-                    avgTempo>130 && "Fast average BPM — you're drawn to music that moves at pace.",
-                    avgTempo<90 && "Slow average BPM — patience and space matter in what you listen to.",
+                    af.instrumentalness>0.4&&"High instrumentalness — you lean toward music where sound does the talking, not lyrics.",
+                    af.acousticness>0.4&&"Significant acousticness — organic instrumentation holds real weight in your rotation.",
+                    af.energy>0.65&&"High energy — your music moves, even when it's experimental.",
+                    af.energy<0.4&&"Low average energy — restrained, textured, or atmospheric sound.",
+                    af.danceability>0.65&&"Strong danceability — rhythm and groove are central to your taste.",
+                    af.valence<0.35&&"Low valence — emotionally, your music skews dark and introspective.",
+                    af.valence>0.65&&"High valence — your taste tends toward the euphoric.",
+                    avgTempo>130&&"Fast average BPM — you're drawn to music that moves at pace.",
+                    avgTempo<90&&"Slow average BPM — patience and space matter in what you listen to.",
                   ].filter(Boolean).map((txt,i)=>(
-                    <div key={i} style={{fontSize:13,color:"#666",fontFamily:"'Playfair Display',serif",fontStyle:"italic",lineHeight:1.7,paddingLeft:12,borderLeft:"2px solid #1DB95440"}}>
+                    <div key={i} style={{fontSize:13,color:C.textMid,lineHeight:1.7,paddingLeft:12,borderLeft:"2px solid "+C.borderDark}}>
                       {txt}
                     </div>
                   ))}
                 </div>
-              </Card>
+              </Panel>
             </div>
           </div>
         )}
 
-        {/* ── TOP TRACKS ── */}
-        {activeTab==="tracks" && (
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
-            <Card>
-              <SectionLabel>Top Tracks · {timeRange==="short"?"4 Weeks":timeRange==="medium"?"6 Months":"All Time"}</SectionLabel>
-              {tracks.slice(0,25).map((t,i)=><TrackRow key={t.id+i} track={t} rank={i+1}/>)}
-            </Card>
-            <Card>
-              <SectionLabel>Top Artists · {timeRange==="short"?"4 Weeks":timeRange==="medium"?"6 Months":"All Time"}</SectionLabel>
-              {artists.slice(0,25).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1}/>)}
-            </Card>
+        {/* EVOLUTION */}
+        {activeTab==="evolution" && (
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+            <div style={{display:"flex",flexDirection:"column",gap:20}}>
+              {newArtists.length>0&&(
+                <Panel>
+                  <SLabel>Newly Emerged · Last 4 Weeks</SLabel>
+                  <p style={{fontSize:12,color:C.textLight,marginBottom:14,fontFamily:"'IBM Plex Mono',monospace"}}>artists new to your rotation</p>
+                  {newArtists.slice(0,12).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1} isNew={true}/>)}
+                </Panel>
+              )}
+              {fadedArtists.length>0&&(
+                <Panel>
+                  <SLabel>Fading From Rotation</SLabel>
+                  {fadedArtists.slice(0,10).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1} isGone={true}/>)}
+                </Panel>
+              )}
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:20}}>
+              <Panel>
+                <SLabel>Long-Term Constants</SLabel>
+                <p style={{fontSize:12,color:C.textLight,marginBottom:14,fontFamily:"'IBM Plex Mono',monospace"}}>{stableArtists.length} artists in both all-time and recent top 20</p>
+                {stableArtists.slice(0,12).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1}/>)}
+              </Panel>
+              <Panel>
+                <SLabel>Genre Shift — All Time vs Recent</SLabel>
+                <div style={{fontSize:10,color:C.textLight,marginBottom:10,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:1}}>ALL TIME</div>
+                <GenreCloud genres={longGenres.slice(0,12)}/>
+                <Divider/>
+                <div style={{fontSize:10,color:C.textLight,marginBottom:10,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:1}}>RECENT (4 WKS)</div>
+                <GenreCloud genres={shortGenres.slice(0,12)}/>
+              </Panel>
+            </div>
           </div>
         )}
 
-      </main>
+      </div>
     </div>
   );
 }
 
-const btnS={background:"#1DB954",color:"#000",border:"none",borderRadius:8,padding:"14px 40px",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:"'Inter',sans-serif",letterSpacing:"0.5px"};
+const btnS={background:"#1a1a1a",color:"#f2f0eb",border:"none",padding:"12px 36px",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"1px"};
 
 ReactDOM.render(<App/>, document.getElementById("root"));
 </script>
