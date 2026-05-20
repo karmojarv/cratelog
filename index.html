@@ -23,176 +23,160 @@ body { background: #080808; color: #fff; font-family: 'DM Mono','Courier New',mo
 const { useState, useEffect, useRef } = React;
 
 const CLIENT_ID = "c7a8b447f9934221825fd322a7b915b5";
+const REDIRECT_URI = "https://karmojarv.github.io/cratelog/";
 const SCOPES = "user-top-read user-read-recently-played user-library-read playlist-read-private user-read-currently-playing";
 
-function getRedirectUri() {
-  return window.location.href.split("?")[0].split("#")[0];
+// ── PKCE HELPERS ──────────────────────────────────────────────────────────────
+function genVerifier() {
+  const arr = new Uint8Array(64);
+  crypto.getRandomValues(arr);
+  return btoa(String.fromCharCode(...arr)).replace(/[^a-zA-Z0-9]/g, "").slice(0, 128);
+}
+async function genChallenge(v) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v));
+  return btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 }
 
-function doAuth(onToken) {
+// ── AUTH: open popup, popup lands back here with ?code=, we detect token via sessionStorage polling ──
+async function doAuth() {
+  const verifier = genVerifier();
+  const challenge = await genChallenge(verifier);
+  // Store verifier so the popup page can use it
+  sessionStorage.setItem("pkce_verifier", verifier);
   const url = "https://accounts.spotify.com/authorize?" + new URLSearchParams({
-    client_id: CLIENT_ID, response_type: "token",
-    redirect_uri: getRedirectUri(), scope: SCOPES, show_dialog: "true",
+    client_id: CLIENT_ID, response_type: "code",
+    redirect_uri: REDIRECT_URI, scope: SCOPES,
+    code_challenge_method: "S256", code_challenge: challenge,
   });
   const w = 480, h = 660;
   const left = Math.round(window.screenX + (window.outerWidth - w) / 2);
   const top = Math.round(window.screenY + (window.outerHeight - h) / 2);
-  const popup = window.open(url, "sp", "width="+w+",height="+h+",left="+left+",top="+top+",toolbar=no,menubar=no");
-  if (!popup) { window.location.href = url; return; }
-  const timer = setInterval(function() {
-    try {
-      if (!popup || popup.closed) { clearInterval(timer); return; }
-      const hash = popup.location.hash;
-      if (hash && hash.includes("access_token")) {
-        const params = new URLSearchParams(hash.slice(1));
-        const token = params.get("access_token");
-        if (token) {
-          sessionStorage.setItem("sp_token", token);
-          onToken(token);
-          popup.close();
-          clearInterval(timer);
-        }
-      }
-    } catch(e) {}
-  }, 400);
+  window.open(url, "sp", "width="+w+",height="+h+",left="+left+",top="+top+",toolbar=no,menubar=no");
 }
 
+// ── TOKEN EXCHANGE (runs when this page is the popup callback) ──────────────
+async function exchangeCode(code) {
+  const verifier = sessionStorage.getItem("pkce_verifier") ||
+    (window.opener && (() => { try { return window.opener.sessionStorage.getItem("pkce_verifier"); } catch(e){ return null; } })());
+  if (!verifier) return null;
+  const res = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: CLIENT_ID, grant_type: "authorization_code",
+      code, redirect_uri: REDIRECT_URI, code_verifier: verifier,
+    }),
+  });
+  const data = await res.json();
+  return data.access_token || null;
+}
+
+// ── SPOTIFY API ───────────────────────────────────────────────────────────────
 async function sGet(path, token) {
   const r = await fetch("https://api.spotify.com/v1" + path, { headers: { Authorization: "Bearer " + token } });
   if (r.status === 204) return null;
   if (!r.ok) throw new Error(String(r.status));
   return r.json();
 }
-
 async function fetchAllRanges(type, token) {
   const [s, m, l] = await Promise.all([
     sGet("/me/top/"+type+"?limit=50&time_range=short_term", token),
     sGet("/me/top/"+type+"?limit=50&time_range=medium_term", token),
     sGet("/me/top/"+type+"?limit=50&time_range=long_term", token),
   ]);
-  return { short: (s&&s.items)||[], medium: (m&&m.items)||[], long: (l&&l.items)||[] };
+  return { short:(s&&s.items)||[], medium:(m&&m.items)||[], long:(l&&l.items)||[] };
 }
 
+// ── CLAUDE API ────────────────────────────────────────────────────────────────
 async function askClaude(prompt) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514", max_tokens: 1000,
-      messages: [{ role: "user", content: prompt }],
-    }),
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, messages: [{ role: "user", content: prompt }] }),
   });
   const data = await res.json();
   return (data.content && data.content[0] && data.content[0].text) || "";
 }
 
+// ── HELPERS ───────────────────────────────────────────────────────────────────
 function genreColor(genre) {
-  const hash = genre.split("").reduce(function(a,c){ return a + c.charCodeAt(0); }, 0);
+  const hash = genre.split("").reduce((a,c) => a + c.charCodeAt(0), 0);
   const hues = [160,195,45,280,340,20,90,230];
   return "hsl("+hues[hash % hues.length]+",70%,55%)";
 }
-
 function aggregateGenres(artists) {
   const counts = {};
-  artists.forEach(function(a) {
-    (a.genres||[]).forEach(function(g){ counts[g] = (counts[g]||0) + 1; });
-  });
-  return Object.entries(counts).sort(function(a,b){ return b[1]-a[1]; }).slice(0,20);
+  artists.forEach(a => (a.genres||[]).forEach(g => { counts[g] = (counts[g]||0) + 1; }));
+  return Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0,20);
 }
-
 function newIn(current, prev) {
-  const prevIds = new Set(prev.map(function(x){ return x.id; }));
-  return current.filter(function(x){ return !prevIds.has(x.id); });
+  const ids = new Set(prev.map(x => x.id));
+  return current.filter(x => !ids.has(x.id));
 }
-
 function inCommon(a, b) {
-  const bIds = new Set(b.map(function(x){ return x.id; }));
-  return a.filter(function(x){ return bIds.has(x.id); });
+  const ids = new Set(b.map(x => x.id));
+  return a.filter(x => ids.has(x.id));
 }
-
 function vibeFromGenres(genres) {
-  const g = genres.map(function(x){ return x[0]; }).join(" ");
+  const g = genres.map(x => x[0]).join(" ");
   return {
-    "Energy": g.match(/metal|punk|hardcore|drum.bass|techno|gabber|industrial/) ? 9
-      : g.match(/electronic|edm|dance|house|rave/) ? 7
-      : g.match(/ambient|classical|folk|acoustic/) ? 2
-      : g.match(/jazz|soul|r.b|blues/) ? 4 : 5,
-    "Experimentalism": g.match(/experimental|avant|noise|glitch|abstract|outsider/) ? 9
-      : g.match(/art|post|neo|new.wave|indie/) ? 6
-      : g.match(/pop|country|top.40/) ? 2 : 4,
-    "Darkness": g.match(/black.metal|goth|dark|death|doom|drone/) ? 9
-      : g.match(/post.punk|industrial|noise/) ? 6
-      : g.match(/happy|sunshine|bubblegum/) ? 1 : 4,
-    "Danceability": g.match(/dance|house|techno|disco|funk|afrobeats|dancehall/) ? 9
-      : g.match(/electronic|hip.hop|r.b/) ? 6
-      : g.match(/ambient|classical|folk/) ? 2 : 4,
-    "Internationalism": g.match(/latin|afro|korean|japanese|french|brazilian|cumbia/) ? 8
-      : g.match(/world|global|tropical/) ? 6 : 3,
+    "Energy": g.match(/metal|punk|hardcore|drum.bass|techno|gabber/) ? 9 : g.match(/electronic|edm|dance|house/) ? 7 : g.match(/ambient|classical|folk|acoustic/) ? 2 : 5,
+    "Experimentalism": g.match(/experimental|avant|noise|glitch|abstract/) ? 9 : g.match(/art|post|neo|new.wave|indie/) ? 6 : g.match(/pop|country/) ? 2 : 4,
+    "Darkness": g.match(/black.metal|goth|dark|death|doom|drone/) ? 9 : g.match(/post.punk|industrial|noise/) ? 6 : g.match(/happy|sunshine/) ? 1 : 4,
+    "Danceability": g.match(/dance|house|techno|disco|funk|afrobeats/) ? 9 : g.match(/electronic|hip.hop|r.b/) ? 6 : g.match(/ambient|classical/) ? 2 : 4,
+    "Internationalism": g.match(/latin|afro|korean|japanese|french|brazilian/) ? 8 : g.match(/world|global|tropical/) ? 6 : 3,
   };
 }
 
-// ── RADAR ─────────────────────────────────────────────────────────────────────
+// ── COMPONENTS ────────────────────────────────────────────────────────────────
+function Loader({ msg }) {
+  return (
+    <div style={{minHeight:"100vh",background:"#080808",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+      <div style={{width:28,height:28,border:"2px solid #1a1a1a",borderTop:"2px solid #1DB954",borderRadius:"50%",animation:"spin 0.8s linear infinite",marginBottom:14}}/>
+      <p style={{color:"#2a2a2a",fontSize:11,fontFamily:"monospace",letterSpacing:2,textTransform:"uppercase"}}>{msg}</p>
+    </div>
+  );
+}
+
 function RadarChart({ data }) {
-  const size = 220, cx = 110, cy = 110, r = 78;
-  const keys = Object.keys(data);
-  const n = keys.length;
-  const pts = keys.map(function(k, i) {
-    const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
-    const val = data[k] / 10;
-    return {
-      x: cx + r * val * Math.cos(angle), y: cy + r * val * Math.sin(angle),
-      lx: cx + (r+30) * Math.cos(angle), ly: cy + (r+30) * Math.sin(angle), label: k,
-    };
+  const size=220, cx=110, cy=110, r=78;
+  const keys = Object.keys(data), n = keys.length;
+  const pts = keys.map((k,i) => {
+    const a = (i/n)*Math.PI*2 - Math.PI/2, val = data[k]/10;
+    return { x:cx+r*val*Math.cos(a), y:cy+r*val*Math.sin(a), lx:cx+(r+30)*Math.cos(a), ly:cy+(r+30)*Math.sin(a), label:k };
   });
-  const gridLevels = [0.25, 0.5, 0.75, 1];
   return (
     <svg width={size} height={size} style={{overflow:"visible"}}>
-      {gridLevels.map(function(lvl) {
-        const polyPts = keys.map(function(_,i){
-          const a = (i/n)*Math.PI*2 - Math.PI/2;
-          return (cx+r*lvl*Math.cos(a))+","+(cy+r*lvl*Math.sin(a));
-        }).join(" ");
-        return <polygon key={lvl} points={polyPts} fill="none" stroke="#1e1e1e" strokeWidth="1"/>;
-      })}
-      {keys.map(function(_,i){
-        const a = (i/n)*Math.PI*2 - Math.PI/2;
-        return <line key={i} x1={cx} y1={cy} x2={cx+r*Math.cos(a)} y2={cy+r*Math.sin(a)} stroke="#1e1e1e" strokeWidth="1"/>;
-      })}
-      <polygon points={pts.map(function(p){return p.x+","+p.y;}).join(" ")} fill="rgba(29,185,84,0.15)" stroke="#1DB954" strokeWidth="2"/>
-      {pts.map(function(p,i){ return <circle key={i} cx={p.x} cy={p.y} r="4" fill="#1DB954"/>; })}
-      {pts.map(function(p,i){
-        return <text key={i} x={p.lx} y={p.ly} textAnchor="middle" dominantBaseline="middle"
-          style={{fontSize:9,fill:"#555",fontFamily:"monospace",textTransform:"uppercase",letterSpacing:1}}>{p.label}</text>;
-      })}
+      {[0.25,0.5,0.75,1].map(lvl =>
+        <polygon key={lvl} points={keys.map((_,i)=>{ const a=(i/n)*Math.PI*2-Math.PI/2; return (cx+r*lvl*Math.cos(a))+","+(cy+r*lvl*Math.sin(a)); }).join(" ")} fill="none" stroke="#1e1e1e" strokeWidth="1"/>
+      )}
+      {keys.map((_,i) => { const a=(i/n)*Math.PI*2-Math.PI/2; return <line key={i} x1={cx} y1={cy} x2={cx+r*Math.cos(a)} y2={cy+r*Math.sin(a)} stroke="#1e1e1e" strokeWidth="1"/>; })}
+      <polygon points={pts.map(p=>p.x+","+p.y).join(" ")} fill="rgba(29,185,84,0.15)" stroke="#1DB954" strokeWidth="2"/>
+      {pts.map((p,i) => <circle key={i} cx={p.x} cy={p.y} r="4" fill="#1DB954"/>)}
+      {pts.map((p,i) => <text key={i} x={p.lx} y={p.ly} textAnchor="middle" dominantBaseline="middle" style={{fontSize:9,fill:"#555",fontFamily:"monospace",textTransform:"uppercase",letterSpacing:1}}>{p.label}</text>)}
     </svg>
   );
 }
 
-// ── GENRE CLOUD ───────────────────────────────────────────────────────────────
 function GenreCloud({ genres }) {
   const max = genres[0] ? genres[0][1] : 1;
   return (
     <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-      {genres.map(function(item) {
-        const name = item[0], count = item[1];
-        const size = 10 + (count/max)*10;
+      {genres.map(([name,count]) => {
         const col = genreColor(name);
-        return <span key={name} style={{fontSize:size,color:col,fontFamily:"monospace",opacity:0.6+(count/max)*0.4,letterSpacing:"0.5px",textShadow:"0 0 16px "+col+"50"}}>{name}</span>;
+        return <span key={name} style={{fontSize:10+(count/max)*10,color:col,fontFamily:"monospace",opacity:0.6+(count/max)*0.4,letterSpacing:"0.5px",textShadow:"0 0 16px "+col+"50"}}>{name}</span>;
       })}
     </div>
   );
 }
 
-// ── ARTIST ROW ────────────────────────────────────────────────────────────────
 function ArtistRow({ artist, rank, isNew, isGone }) {
-  const img = (artist.images&&artist.images[2]&&artist.images[2].url) || (artist.images&&artist.images[1]&&artist.images[1].url);
+  const img = artist.images && (artist.images[2]||artist.images[1]||artist.images[0]);
   return (
     <div style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",borderBottom:"1px solid #111",opacity:isGone?0.3:1}}>
       <span style={{width:20,textAlign:"right",color:"#333",fontSize:11,flexShrink:0}}>{rank}</span>
-      {img
-        ? <img src={img} alt="" style={{width:36,height:36,borderRadius:"50%",objectFit:"cover",flexShrink:0}}/>
-        : <div style={{width:36,height:36,borderRadius:"50%",background:"#1a1a1a",flexShrink:0}}/>
-      }
+      {img ? <img src={img.url} alt="" style={{width:36,height:36,borderRadius:"50%",objectFit:"cover",flexShrink:0}}/> : <div style={{width:36,height:36,borderRadius:"50%",background:"#1a1a1a",flexShrink:0}}/>}
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontSize:13,color:isGone?"#444":"#ddd",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{artist.name}</div>
         <div style={{fontSize:10,color:"#444",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{artist.genres&&artist.genres.slice(0,2).join(" · ")}</div>
@@ -203,50 +187,44 @@ function ArtistRow({ artist, rank, isNew, isGone }) {
   );
 }
 
-// ── CLAUDE ANALYSIS ───────────────────────────────────────────────────────────
 function ClaudeAnalysis({ data }) {
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
   const ran = useRef(false);
-
-  useEffect(function() {
+  useEffect(() => {
     if (ran.current || !data) return;
     ran.current = true;
     setLoading(true);
-
-    const allTimeArtists = data.artists.long.slice(0,20).map(function(a){return a.name;}).join(", ");
-    const recentArtists = data.artists.short.slice(0,10).map(function(a){return a.name;}).join(", ");
-    const allTimeGenres = aggregateGenres(data.artists.long).slice(0,15).map(function(x){return x[0];}).join(", ");
-    const recentGenres = aggregateGenres(data.artists.short).slice(0,10).map(function(x){return x[0];}).join(", ");
-    const newArrivals = newIn(data.artists.short, data.artists.long).slice(0,5).map(function(a){return a.name;}).join(", ");
-    const allTimeTracks = data.tracks.long.slice(0,10).map(function(t){return t.name+" by "+(t.artists&&t.artists[0]&&t.artists[0].name);}).join(", ");
-
-    const prompt = `You are a music critic and cultural analyst. Analyze this person's Spotify listening data and write a rich, insightful portrait of their musical taste and identity.
+    const allTimeArtists = data.artists.long.slice(0,20).map(a=>a.name).join(", ");
+    const recentArtists = data.artists.short.slice(0,10).map(a=>a.name).join(", ");
+    const allTimeGenres = aggregateGenres(data.artists.long).slice(0,15).map(x=>x[0]).join(", ");
+    const recentGenres = aggregateGenres(data.artists.short).slice(0,10).map(x=>x[0]).join(", ");
+    const newArrivals = newIn(data.artists.short, data.artists.long).slice(0,5).map(a=>a.name).join(", ");
+    const topTracks = data.tracks.long.slice(0,10).map(t=>t.name+" by "+(t.artists&&t.artists[0]&&t.artists[0].name)).join(", ");
+    const prompt = `You are a music critic and cultural analyst. Analyze this person's Spotify data and write a rich portrait of their musical taste.
 
 ALL-TIME TOP ARTISTS: ${allTimeArtists}
 RECENT TOP ARTISTS (last 4 weeks): ${recentArtists}
 ALL-TIME GENRES: ${allTimeGenres}
 RECENT GENRES: ${recentGenres}
-RECENTLY EMERGED ARTISTS: ${newArrivals||"none notable"}
-ALL-TIME TOP TRACKS: ${allTimeTracks}
+RECENTLY EMERGED: ${newArrivals||"none notable"}
+ALL-TIME TOP TRACKS: ${topTracks}
 
-Write 4 sections with these exact headers (use markdown ##):
+Write 4 sections with these exact headers (##):
 ## Your Sound Identity
-2-3 sentences describing their overall musical identity in vivid, specific language. Name the aesthetic threads. Be precise, not generic.
+2-3 sentences on their overall musical identity. Vivid, specific, not generic.
 
 ## How Your Taste Has Evolved
-2-3 sentences on what the shift from all-time to recent listening suggests about their taste trajectory.
+2-3 sentences on the shift from all-time to recent — what trajectory does it suggest?
 
 ## The Genres That Define You
-A paragraph describing their genre world in cultural/critical terms — not just listing genres but explaining what they mean together.
+A paragraph on their genre world in cultural/critical terms — what do these genres mean together?
 
 ## What Your Taste Says About You
-2-3 sentences on the personality and aesthetic values implied. Be specific and a little bold.
+2-3 bold, specific sentences on the personality implied. No clichés.
 
-Be specific, intelligent, avoid generic phrases like "eclectic taste". Write like a good music journalist.`;
-
-    askClaude(prompt).then(function(t){ setText(t); setLoading(false); })
-      .catch(function(){ setText("Could not generate analysis — Claude API unavailable."); setLoading(false); });
+Write like a good music journalist. Never say "eclectic taste".`;
+    askClaude(prompt).then(t => { setText(t); setLoading(false); }).catch(() => { setText("Claude analysis unavailable."); setLoading(false); });
   }, [data]);
 
   if (loading) return (
@@ -255,98 +233,112 @@ Be specific, intelligent, avoid generic phrases like "eclectic taste". Write lik
       <p style={{color:"#444",fontSize:12,marginTop:12,fontFamily:"monospace"}}>analysing your taste...</p>
     </div>
   );
-
-  const sections = text.split(/^## /m).filter(Boolean).map(function(s){
-    const nl = s.indexOf("\n");
-    return { title: s.slice(0,nl).trim(), body: s.slice(nl+1).trim() };
-  });
-
+  const sections = text.split(/^## /m).filter(Boolean).map(s => { const nl=s.indexOf("\n"); return {title:s.slice(0,nl).trim(),body:s.slice(nl+1).trim()}; });
   return (
     <div style={{paddingTop:8}}>
-      {sections.map(function(s,i){
-        return (
-          <div key={i} style={{marginBottom:28}}>
-            <div style={{fontSize:9,letterSpacing:"2px",textTransform:"uppercase",color:"#1DB954",marginBottom:8,fontFamily:"monospace"}}>{s.title}</div>
-            <p style={{color:"#aaa",fontSize:14,lineHeight:1.8,margin:0,fontFamily:"Georgia,serif"}}>{s.body}</p>
-          </div>
-        );
-      })}
+      {sections.map((s,i) => (
+        <div key={i} style={{marginBottom:28}}>
+          <div style={{fontSize:9,letterSpacing:"2px",textTransform:"uppercase",color:"#1DB954",marginBottom:8,fontFamily:"monospace"}}>{s.title}</div>
+          <p style={{color:"#aaa",fontSize:14,lineHeight:1.8,margin:0,fontFamily:"Georgia,serif"}}>{s.body}</p>
+        </div>
+      ))}
       {!sections.length && text && <p style={{color:"#555",fontSize:13}}>{text}</p>}
     </div>
   );
 }
 
-// ── LOADER ────────────────────────────────────────────────────────────────────
-function Loader({ msg }) {
-  return (
-    <div style={{minHeight:"100vh",background:"#080808",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
-      <div style={{width:28,height:28,border:"2px solid #1a1a1a",borderTop:"2px solid #1DB954",borderRadius:"50%",animation:"spin 0.8s linear infinite",marginBottom:14}}/>
-      <p style={{color:"#2a2a2a",fontSize:11,fontFamily:"monospace",letterSpacing:2,textTransform:"uppercase"}}>{msg}</p>
-    </div>
-  );
-}
-
-// ── MAIN APP ──────────────────────────────────────────────────────────────────
+// ── MAIN ──────────────────────────────────────────────────────────────────────
 function App() {
   const [token, setToken] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [fetchingData, setFetchingData] = useState(false);
+  const [phase, setPhase] = useState("init"); // init | login | loading | ready | error
   const [error, setError] = useState(null);
   const [profile, setProfile] = useState(null);
   const [data, setData] = useState(null);
   const [activeTab, setActiveTab] = useState("identity");
+  const pollRef = useRef(null);
 
-  useEffect(function() {
-    const stored = sessionStorage.getItem("sp_token");
-    const hash = window.location.hash;
-    if (hash && hash.includes("access_token")) {
-      const params = new URLSearchParams(hash.slice(1));
-      const t = params.get("access_token");
-      if (t) {
-        sessionStorage.setItem("sp_token", t);
-        window.history.replaceState({}, "", window.location.pathname);
-        setToken(t);
-        setLoading(false);
-        return;
-      }
+  useEffect(() => {
+    // Are we the popup callback page?
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    if (code) {
+      window.history.replaceState({}, "", window.location.pathname);
+      setPhase("loading");
+      exchangeCode(code).then(t => {
+        if (t) {
+          // Store for opener polling
+          sessionStorage.setItem("sp_token", t);
+          // If we're a popup, close and let opener pick it up
+          if (window.opener) {
+            window.opener.sessionStorage.setItem("sp_token", t);
+            window.close();
+          } else {
+            setToken(t);
+            setPhase("ready");
+          }
+        } else {
+          setError("Token exchange failed.");
+          setPhase("error");
+        }
+      });
+      return;
     }
-    if (stored) setToken(stored);
-    setLoading(false);
+
+    // Normal load — check for stored token
+    const stored = sessionStorage.getItem("sp_token");
+    if (stored) { setToken(stored); setPhase("ready"); }
+    else setPhase("login");
   }, []);
 
-  useEffect(function() {
-    if (!token) return;
-    setFetchingData(true);
+  // Poll for token after popup auth
+  function startPolling() {
+    pollRef.current = setInterval(() => {
+      const t = sessionStorage.getItem("sp_token");
+      if (t) {
+        clearInterval(pollRef.current);
+        setToken(t);
+        setPhase("ready");
+      }
+    }, 600);
+  }
+
+  // Fetch Spotify data once we have token
+  useEffect(() => {
+    if (!token || data) return;
+    setPhase("loading");
     Promise.all([
       sGet("/me", token),
       fetchAllRanges("artists", token),
       fetchAllRanges("tracks", token),
-    ]).then(function(results) {
-      setProfile(results[0]);
-      setData({ artists: results[1], tracks: results[2] });
-      setFetchingData(false);
-    }).catch(function(e) {
-      if (e.message === "401") { sessionStorage.removeItem("sp_token"); setToken(null); }
-      else setError("Failed to load Spotify data.");
-      setFetchingData(false);
+    ]).then(([prof, artists, tracks]) => {
+      setProfile(prof);
+      setData({ artists, tracks });
+      setPhase("ready");
+    }).catch(e => {
+      if (e.message === "401") { sessionStorage.removeItem("sp_token"); setToken(null); setPhase("login"); }
+      else { setError("Failed to load Spotify data."); setPhase("error"); }
     });
   }, [token]);
 
   function logout() {
     sessionStorage.removeItem("sp_token");
-    setToken(null); setData(null); setProfile(null);
+    setToken(null); setData(null); setProfile(null); setPhase("login");
   }
 
-  if (loading) return <Loader msg="initialising"/>;
-  if (fetchingData) return <Loader msg="digging through your crates"/>;
-  if (error) return (
+  async function handleConnect() {
+    await doAuth();
+    startPolling();
+  }
+
+  if (phase === "init" || phase === "loading") return <Loader msg={phase === "init" ? "initialising" : "digging through your crates"}/>;
+  if (phase === "error") return (
     <div style={{minHeight:"100vh",background:"#080808",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
       <p style={{color:"#ff4444",marginBottom:16}}>{error}</p>
-      <button style={btnStyle} onClick={logout}>Retry</button>
+      <button style={btnS} onClick={() => setPhase("login")}>Retry</button>
     </div>
   );
 
-  if (!token) return (
+  if (phase === "login") return (
     <div style={{minHeight:"100vh",background:"#080808",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
       <div style={{textAlign:"center",animation:"fadeUp 0.5s ease",maxWidth:320}}>
         <div style={{fontSize:40,marginBottom:20,color:"#1DB954"}}>◈</div>
@@ -354,7 +346,8 @@ function App() {
         <p style={{color:"#444",fontSize:13,lineHeight:1.7,marginBottom:28,fontFamily:"monospace"}}>
           Map how your music has evolved.<br/>Understand the sound that defines you.
         </p>
-        <button style={btnStyle} onClick={function(){ doAuth(setToken); }}>Connect Spotify</button>
+        <button style={btnS} onClick={handleConnect}>Connect Spotify</button>
+        <p style={{color:"#222",fontSize:11,marginTop:14,fontFamily:"monospace"}}>opens a popup window</p>
       </div>
     </div>
   );
@@ -367,13 +360,7 @@ function App() {
   const newArtists = newIn(data.artists.short, data.artists.long);
   const fadedArtists = newIn(data.artists.long.slice(0,20), data.artists.short);
   const stableArtists = inCommon(data.artists.long.slice(0,20), data.artists.short.slice(0,20));
-
-  const tabs = [
-    {id:"identity",label:"Identity"},
-    {id:"evolution",label:"Evolution"},
-    {id:"genres",label:"Genres"},
-    {id:"vibe",label:"Vibe"},
-  ];
+  const tabs = [{id:"identity",label:"Identity"},{id:"evolution",label:"Evolution"},{id:"genres",label:"Genres"},{id:"vibe",label:"Vibe"}];
 
   return (
     <div style={{minHeight:"100vh",background:"#080808"}}>
@@ -391,54 +378,47 @@ function App() {
 
       {/* Tabs */}
       <div style={{display:"flex",borderBottom:"1px solid #111",overflowX:"auto"}}>
-        {tabs.map(function(t){
-          const active = activeTab === t.id;
-          return (
-            <button key={t.id} onClick={function(){ setActiveTab(t.id); }}
-              style={{flex:1,background:"none",border:"none",color:active?"#1DB954":"#2a2a2a",padding:"13px 8px",fontSize:11,cursor:"pointer",letterSpacing:"2px",textTransform:"uppercase",fontFamily:"monospace",borderBottom:active?"2px solid #1DB954":"2px solid transparent",whiteSpace:"nowrap"}}>
-              {t.label}
-            </button>
-          );
-        })}
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setActiveTab(t.id)}
+            style={{flex:1,background:"none",border:"none",color:activeTab===t.id?"#1DB954":"#2a2a2a",padding:"13px 8px",fontSize:11,cursor:"pointer",letterSpacing:"2px",textTransform:"uppercase",fontFamily:"monospace",borderBottom:activeTab===t.id?"2px solid #1DB954":"2px solid transparent",whiteSpace:"nowrap"}}>
+            {t.label}
+          </button>
+        ))}
       </div>
 
-      {/* Content */}
+      {/* Body */}
       <div style={{padding:"24px 20px 48px"}}>
 
-        {activeTab === "identity" && (
+        {activeTab==="identity" && (
           <div>
-            <div style={labelStyle}>AI Portrait of Your Taste</div>
+            <div style={lblS}>AI Portrait of Your Taste</div>
             <ClaudeAnalysis data={data}/>
           </div>
         )}
 
-        {activeTab === "evolution" && (
+        {activeTab==="evolution" && (
           <div>
-            <div style={labelStyle}>Taste Drift · All Time → Last 4 Weeks</div>
+            <div style={lblS}>Taste Drift · All Time → Last 4 Weeks</div>
             <p style={{fontSize:12,color:"#333",marginBottom:20,lineHeight:1.6,fontFamily:"monospace"}}>
               {stableArtists.length} constants · {newArtists.length} newly emerged · {fadedArtists.length} fading
             </p>
-
             {newArtists.length > 0 && (
               <div style={{marginBottom:24}}>
                 <div style={{fontSize:9,letterSpacing:"2px",color:"#1DB954",marginBottom:10,fontFamily:"monospace"}}>RECENTLY EMERGED</div>
-                {newArtists.slice(0,8).map(function(a,i){ return <ArtistRow key={a.id} artist={a} rank={i+1} isNew={true}/>; })}
+                {newArtists.slice(0,8).map((a,i) => <ArtistRow key={a.id} artist={a} rank={i+1} isNew={true}/>)}
               </div>
             )}
-
             <div style={{marginBottom:24}}>
               <div style={{fontSize:9,letterSpacing:"2px",color:"#666",marginBottom:10,fontFamily:"monospace"}}>LONG-TERM CONSTANTS</div>
-              {stableArtists.slice(0,8).map(function(a,i){ return <ArtistRow key={a.id} artist={a} rank={i+1}/>; })}
+              {stableArtists.slice(0,8).map((a,i) => <ArtistRow key={a.id} artist={a} rank={i+1}/>)}
             </div>
-
             {fadedArtists.length > 0 && (
               <div style={{marginBottom:28}}>
                 <div style={{fontSize:9,letterSpacing:"2px",color:"#333",marginBottom:10,fontFamily:"monospace"}}>FADING FROM ROTATION</div>
-                {fadedArtists.slice(0,6).map(function(a,i){ return <ArtistRow key={a.id} artist={a} rank={i+1} isGone={true}/>; })}
+                {fadedArtists.slice(0,6).map((a,i) => <ArtistRow key={a.id} artist={a} rank={i+1} isGone={true}/>)}
               </div>
             )}
-
-            <div style={labelStyle}>Genre Shift</div>
+            <div style={lblS}>Genre Shift</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
               <div>
                 <div style={{fontSize:9,color:"#333",letterSpacing:2,marginBottom:10,fontFamily:"monospace"}}>ALL TIME</div>
@@ -452,14 +432,13 @@ function App() {
           </div>
         )}
 
-        {activeTab === "genres" && (
+        {activeTab==="genres" && (
           <div>
-            <div style={labelStyle}>Your Genre Universe</div>
+            <div style={lblS}>Your Genre Universe</div>
             <GenreCloud genres={longGenres}/>
             <div style={{marginTop:28}}>
-              <div style={labelStyle}>Top 20 Genres by Frequency</div>
-              {longGenres.map(function(item, i){
-                const name = item[0], count = item[1];
+              <div style={lblS}>Top 20 Genres by Frequency</div>
+              {longGenres.map(([name,count],i) => {
                 const max = longGenres[0][1];
                 return (
                   <div key={name} style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
@@ -480,29 +459,26 @@ function App() {
           </div>
         )}
 
-        {activeTab === "vibe" && (
+        {activeTab==="vibe" && (
           <div>
-            <div style={labelStyle}>Listening Personality</div>
+            <div style={lblS}>Listening Personality</div>
             <div style={{display:"flex",justifyContent:"center",padding:"16px 0 8px"}}>
               <RadarChart data={vibes}/>
             </div>
             <div style={{marginTop:8}}>
-              {Object.entries(vibes).map(function(entry){
-                const k = entry[0], v = entry[1];
-                return (
-                  <div key={k} style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
-                    <span style={{width:110,fontSize:10,color:"#333",letterSpacing:1.5,textTransform:"uppercase",fontFamily:"monospace",flexShrink:0}}>{k}</span>
-                    <div style={{flex:1,height:3,background:"#111",borderRadius:2}}>
-                      <div style={{height:"100%",width:(v*10)+"%",background:"hsl("+(100+v*8)+",70%,50%)",borderRadius:2}}/>
-                    </div>
-                    <span style={{width:20,fontSize:11,color:"#444",textAlign:"right",fontFamily:"monospace"}}>{v}</span>
+              {Object.entries(vibes).map(([k,v]) => (
+                <div key={k} style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
+                  <span style={{width:110,fontSize:10,color:"#333",letterSpacing:1.5,textTransform:"uppercase",fontFamily:"monospace",flexShrink:0}}>{k}</span>
+                  <div style={{flex:1,height:3,background:"#111",borderRadius:2}}>
+                    <div style={{height:"100%",width:(v*10)+"%",background:"hsl("+(100+v*8)+",70%,50%)",borderRadius:2}}/>
                   </div>
-                );
-              })}
+                  <span style={{width:20,fontSize:11,color:"#444",textAlign:"right",fontFamily:"monospace"}}>{v}</span>
+                </div>
+              ))}
             </div>
             <div style={{marginTop:28}}>
-              <div style={labelStyle}>All-Time Top Artists</div>
-              {data.artists.long.slice(0,15).map(function(a,i){ return <ArtistRow key={a.id} artist={a} rank={i+1}/>; })}
+              <div style={lblS}>All-Time Top Artists</div>
+              {data.artists.long.slice(0,15).map((a,i) => <ArtistRow key={a.id} artist={a} rank={i+1}/>)}
             </div>
           </div>
         )}
@@ -512,8 +488,8 @@ function App() {
   );
 }
 
-const btnStyle = {background:"#1DB954",color:"#000",border:"none",borderRadius:100,padding:"13px 36px",fontSize:14,fontWeight:700,cursor:"pointer"};
-const labelStyle = {fontSize:9,letterSpacing:"2px",textTransform:"uppercase",color:"#2a2a2a",marginBottom:16,fontFamily:"monospace"};
+const btnS = {background:"#1DB954",color:"#000",border:"none",borderRadius:100,padding:"13px 36px",fontSize:14,fontWeight:700,cursor:"pointer"};
+const lblS = {fontSize:9,letterSpacing:"2px",textTransform:"uppercase",color:"#2a2a2a",marginBottom:16,fontFamily:"monospace"};
 
 ReactDOM.render(<App/>, document.getElementById("root"));
 </script>
