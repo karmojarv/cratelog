@@ -4,492 +4,779 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Cratelog</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #080808; color: #fff; font-family: 'DM Mono','Courier New',monospace; min-height: 100vh; }
+body { background: #0c0c0c; color: #e8e8e8; font-family: 'Inter', sans-serif; min-height: 100vh; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@keyframes fadeUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: #080808; }
-::-webkit-scrollbar-thumb { background: #1a1a1a; }
+@keyframes fadeUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+@keyframes pulse { 0%,100% { opacity:0.4; } 50% { opacity:1; } }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #0c0c0c; }
+::-webkit-scrollbar-thumb { background: #222; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #333; }
+.tab-btn { transition: color 0.15s, border-color 0.15s; }
+.tab-btn:hover { color: #888 !important; }
+.artist-row:hover { background: #141414; }
+.artist-row { transition: background 0.1s; border-radius: 6px; }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useEffect, useRef } = React;
+const { useState, useEffect, useRef, useMemo } = React;
 
 const CLIENT_ID = "c7a8b447f9934221825fd322a7b915b5";
 const REDIRECT_URI = "https://karmojarv.github.io/cratelog/";
 const SCOPES = "user-top-read user-read-recently-played user-library-read playlist-read-private user-read-currently-playing";
 
-// ── PKCE HELPERS ──────────────────────────────────────────────────────────────
+// ── PKCE ──────────────────────────────────────────────────────────────────────
 function genVerifier() {
   const arr = new Uint8Array(64);
   crypto.getRandomValues(arr);
-  return btoa(String.fromCharCode(...arr)).replace(/[^a-zA-Z0-9]/g, "").slice(0, 128);
+  return btoa(String.fromCharCode(...arr)).replace(/[^a-zA-Z0-9]/g,"").slice(0,128);
 }
 async function genChallenge(v) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v));
-  return btoa(String.fromCharCode(...new Uint8Array(digest)))
-    .replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v));
+  return btoa(String.fromCharCode(...new Uint8Array(d))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 }
-
-// ── AUTH: open popup, popup lands back here with ?code=, we detect token via sessionStorage polling ──
 async function doAuth() {
-  const verifier = genVerifier();
-  const challenge = await genChallenge(verifier);
-  // Store verifier so the popup page can use it
-  sessionStorage.setItem("pkce_verifier", verifier);
+  const v = genVerifier(), c = await genChallenge(v);
+  sessionStorage.setItem("pkce_verifier", v);
   const url = "https://accounts.spotify.com/authorize?" + new URLSearchParams({
-    client_id: CLIENT_ID, response_type: "code",
-    redirect_uri: REDIRECT_URI, scope: SCOPES,
-    code_challenge_method: "S256", code_challenge: challenge,
+    client_id:CLIENT_ID, response_type:"code", redirect_uri:REDIRECT_URI,
+    scope:SCOPES, code_challenge_method:"S256", code_challenge:c,
   });
-  const w = 480, h = 660;
-  const left = Math.round(window.screenX + (window.outerWidth - w) / 2);
-  const top = Math.round(window.screenY + (window.outerHeight - h) / 2);
-  window.open(url, "sp", "width="+w+",height="+h+",left="+left+",top="+top+",toolbar=no,menubar=no");
+  const w=500,h=700,left=Math.round(window.screenX+(window.outerWidth-w)/2),top=Math.round(window.screenY+(window.outerHeight-h)/2);
+  window.open(url,"sp","width="+w+",height="+h+",left="+left+",top="+top+",toolbar=no,menubar=no");
 }
-
-// ── TOKEN EXCHANGE (runs when this page is the popup callback) ──────────────
 async function exchangeCode(code) {
-  const verifier = sessionStorage.getItem("pkce_verifier") ||
-    (window.opener && (() => { try { return window.opener.sessionStorage.getItem("pkce_verifier"); } catch(e){ return null; } })());
-  if (!verifier) return null;
+  const v = sessionStorage.getItem("pkce_verifier") || (window.opener && (() => { try { return window.opener.sessionStorage.getItem("pkce_verifier"); } catch(e){ return null; } })());
+  if (!v) return null;
   const res = await fetch("https://accounts.spotify.com/api/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: CLIENT_ID, grant_type: "authorization_code",
-      code, redirect_uri: REDIRECT_URI, code_verifier: verifier,
-    }),
+    method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body: new URLSearchParams({ client_id:CLIENT_ID, grant_type:"authorization_code", code, redirect_uri:REDIRECT_URI, code_verifier:v }),
   });
-  const data = await res.json();
-  return data.access_token || null;
+  const d = await res.json();
+  return d.access_token || null;
 }
 
 // ── SPOTIFY API ───────────────────────────────────────────────────────────────
 async function sGet(path, token) {
-  const r = await fetch("https://api.spotify.com/v1" + path, { headers: { Authorization: "Bearer " + token } });
-  if (r.status === 204) return null;
+  const r = await fetch("https://api.spotify.com/v1"+path, { headers:{ Authorization:"Bearer "+token } });
+  if (r.status===204) return null;
   if (!r.ok) throw new Error(String(r.status));
   return r.json();
 }
 async function fetchAllRanges(type, token) {
-  const [s, m, l] = await Promise.all([
-    sGet("/me/top/"+type+"?limit=50&time_range=short_term", token),
-    sGet("/me/top/"+type+"?limit=50&time_range=medium_term", token),
-    sGet("/me/top/"+type+"?limit=50&time_range=long_term", token),
+  const [s,m,l] = await Promise.all([
+    sGet("/me/top/"+type+"?limit=50&time_range=short_term",token),
+    sGet("/me/top/"+type+"?limit=50&time_range=medium_term",token),
+    sGet("/me/top/"+type+"?limit=50&time_range=long_term",token),
   ]);
   return { short:(s&&s.items)||[], medium:(m&&m.items)||[], long:(l&&l.items)||[] };
 }
-
-// ── CLAUDE API ────────────────────────────────────────────────────────────────
-async function askClaude(prompt) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, messages: [{ role: "user", content: prompt }] }),
-  });
-  const data = await res.json();
-  return (data.content && data.content[0] && data.content[0].text) || "";
+async function fetchAudioFeatures(trackIds, token) {
+  if (!trackIds.length) return [];
+  // batch in groups of 100
+  const batches = [];
+  for (let i=0; i<trackIds.length; i+=100) batches.push(trackIds.slice(i,i+100));
+  const results = await Promise.all(batches.map(b => sGet("/audio-features?ids="+b.join(","),token)));
+  return results.flatMap(r => (r&&r.audio_features)||[]).filter(Boolean);
 }
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
-function genreColor(genre) {
-  const hash = genre.split("").reduce((a,c) => a + c.charCodeAt(0), 0);
-  const hues = [160,195,45,280,340,20,90,230];
-  return "hsl("+hues[hash % hues.length]+",70%,55%)";
-}
 function aggregateGenres(artists) {
-  const counts = {};
-  artists.forEach(a => (a.genres||[]).forEach(g => { counts[g] = (counts[g]||0) + 1; }));
-  return Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0,20);
+  const c={};
+  artists.forEach(a=>(a.genres||[]).forEach(g=>{c[g]=(c[g]||0)+1;}));
+  return Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,24);
 }
-function newIn(current, prev) {
-  const ids = new Set(prev.map(x => x.id));
-  return current.filter(x => !ids.has(x.id));
-}
-function inCommon(a, b) {
-  const ids = new Set(b.map(x => x.id));
-  return a.filter(x => ids.has(x.id));
-}
-function vibeFromGenres(genres) {
-  const g = genres.map(x => x[0]).join(" ");
-  return {
-    "Energy": g.match(/metal|punk|hardcore|drum.bass|techno|gabber/) ? 9 : g.match(/electronic|edm|dance|house/) ? 7 : g.match(/ambient|classical|folk|acoustic/) ? 2 : 5,
-    "Experimentalism": g.match(/experimental|avant|noise|glitch|abstract/) ? 9 : g.match(/art|post|neo|new.wave|indie/) ? 6 : g.match(/pop|country/) ? 2 : 4,
-    "Darkness": g.match(/black.metal|goth|dark|death|doom|drone/) ? 9 : g.match(/post.punk|industrial|noise/) ? 6 : g.match(/happy|sunshine/) ? 1 : 4,
-    "Danceability": g.match(/dance|house|techno|disco|funk|afrobeats/) ? 9 : g.match(/electronic|hip.hop|r.b/) ? 6 : g.match(/ambient|classical/) ? 2 : 4,
-    "Internationalism": g.match(/latin|afro|korean|japanese|french|brazilian/) ? 8 : g.match(/world|global|tropical/) ? 6 : 3,
-  };
+function newIn(cur,prev) { const s=new Set(prev.map(x=>x.id)); return cur.filter(x=>!s.has(x.id)); }
+function inCommon(a,b) { const s=new Set(b.map(x=>x.id)); return a.filter(x=>s.has(x.id)); }
+function avg(arr) { return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0; }
+
+function genreColor(genre) {
+  const hash = genre.split("").reduce((a,c)=>a+c.charCodeAt(0),0);
+  const hues=[160,195,45,280,340,20,90,230];
+  return "hsl("+hues[hash%hues.length]+",65%,58%)";
 }
 
-// ── COMPONENTS ────────────────────────────────────────────────────────────────
+function obscurityScore(artists) {
+  if (!artists.length) return 50;
+  const avgPop = avg(artists.map(a=>a.popularity||50));
+  return Math.round(100 - avgPop);
+}
+
+function obscurityLabel(score) {
+  if (score >= 80) return "Deep Underground";
+  if (score >= 65) return "Mostly Niche";
+  if (score >= 50) return "Indie Adjacent";
+  if (score >= 35) return "Mainstream Aware";
+  return "Chart Familiar";
+}
+
+function generateAnalysis(data) {
+  const longGenres = aggregateGenres(data.artists.long);
+  const shortGenres = aggregateGenres(data.artists.short);
+  const genreNames = longGenres.map(x=>x[0]);
+  const recentGenreNames = shortGenres.map(x=>x[0]);
+  const g = genreNames.join(" ");
+  const topArtists = data.artists.long.slice(0,5).map(a=>a.name);
+  const newArtists = newIn(data.artists.short, data.artists.long).slice(0,3).map(a=>a.name);
+  const stableArtists = inCommon(data.artists.long.slice(0,10), data.artists.short.slice(0,10)).slice(0,3).map(a=>a.name);
+  const genresDrifting = recentGenreNames.filter(rg=>!genreNames.slice(0,8).includes(rg)).slice(0,3);
+  const driftingToward = genresDrifting.length>0 ? genresDrifting.join(", ") : null;
+  const isExp=/experimental|avant|noise|glitch|abstract|art.rock|post.rock|kraut/.test(g);
+  const isElec=/electronic|techno|house|ambient|synthpop|idm|industrial|electro/.test(g);
+  const isDark=/goth|dark|doom|drone|black|death|post.punk|cold.wave|darkwave/.test(g);
+  const isDance=/dance|disco|funk|afrobeats|techno|house|club/.test(g);
+  const isIndie=/indie|alternative|lo.fi|shoegaze|dream.pop|chamber/.test(g);
+  const isJazz=/jazz|soul|r.b|blues|neo.soul/.test(g);
+  const isClassical=/classical|contemporary|minimalism|orchestral/.test(g);
+  const isHipHop=/hip.hop|rap|trap|grime/.test(g);
+  const isIntl=/latin|afro|french|german|japanese|korean|brazilian|nordic|estonian/.test(g);
+  let core="";
+  if (isExp&&isElec) core="post-internet electronics and experimental sound design";
+  else if (isExp&&isDark) core="avant-garde darkness and experimental texture";
+  else if (isElec&&isDark) core="brooding electronic music with industrial undertones";
+  else if (isElec&&isDance) core="dance-floor electronics with a curatorial edge";
+  else if (isIndie&&isExp) core="experimental indie with a taste for the unconventional";
+  else if (isJazz&&isElec) core="electronic music rooted in jazz sensibility";
+  else if (isClassical&&isElec) core="contemporary classical and electronic sound";
+  else if (isIndie) core="indie and alternative music with a thoughtful curatorial approach";
+  else if (isElec) core="electronic music across its many subgenres";
+  else if (isHipHop) core="hip-hop and its surrounding sonic universe";
+  else core="a wide-ranging collection built on strong aesthetic instincts";
+  const t3=topArtists.slice(0,3).join(", ");
+  let identity="Your listening is anchored in "+core+" — a thread running through your long-term relationship with artists like "+t3+". ";
+  if (isDark) identity+="There is a consistent pull toward music with weight and atmosphere, where texture matters as much as melody. ";
+  if (isExp) identity+="You consistently gravitate toward artists who treat genre as a starting point rather than a destination. ";
+  if (isIntl) identity+="Your taste extends well beyond Anglophone scenes, suggesting genuine curiosity about music as a global practice. ";
+  let evol="";
+  if (stableArtists.length>2) evol+=stableArtists.join(", ")+" have remained constants across your listening history — a backbone that does not shift. ";
+  if (newArtists.length>0&&driftingToward) evol+="Recently you have pulled toward "+newArtists.join(", ")+", suggesting a current interest in "+driftingToward+". Whether this is a phase or a new direction only time will tell.";
+  else if (newArtists.length>0) evol+=newArtists.join(", ")+" have entered your recent rotation — newer arrivals that suggest your taste is still actively moving.";
+  else evol+="Your recent and all-time charts are closely aligned — a period of deepening rather than expanding, returning to familiar territory with renewed focus.";
+  const families=[];
+  if (isExp) families.push("experimental and avant-garde");
+  if (isElec) families.push("electronic");
+  if (isDark) families.push("dark and post-punk");
+  if (isIndie) families.push("indie and alternative");
+  if (isJazz) families.push("jazz and soul");
+  if (isClassical) families.push("contemporary classical");
+  if (isHipHop) families.push("hip-hop");
+  if (isDance) families.push("dance");
+  let genres="Your genre map spans "+(families.length>0?families.join(", "):"diverse")+" territory. ";
+  genres+="These share a common thread of music that rewards close listening, where surface aesthetics give way to structural depth. ";
+  genres+=isExp?"The presence of experimental genres suggests someone who uses music as a lens for thinking about sound itself.":isElec?"Electronic music runs as connective tissue, suggesting an interest in production and texture as primary creative acts.":"The breadth here reflects not restlessness but range — a listener who can move between modes without losing a sense of self.";
+  let pers="You listen with intention. ";
+  pers+=isExp?"The density of experimental genres suggests someone for whom music is a serious cultural practice, not background noise. ":"The specificity of your taste suggests someone who actively seeks music out rather than waiting for it to arrive. ";
+  pers+=isDark?"There is a preference for music that sits with discomfort rather than resolving it — a tolerance for ambiguity that extends beyond the speakers.":isDance?"The dance music thread suggests you understand music as something physical and communal, not just cerebral.":"You likely have strong opinions about what makes music worth your time.";
+  return [
+    {title:"Your Sound Identity",body:identity.trim()},
+    {title:"How Your Taste Has Evolved",body:evol.trim()},
+    {title:"The Genres That Define You",body:genres.trim()},
+    {title:"What Your Taste Says About You",body:pers.trim()},
+  ];
+}
+
+// ── VISUAL COMPONENTS ─────────────────────────────────────────────────────────
 function Loader({ msg }) {
   return (
-    <div style={{minHeight:"100vh",background:"#080808",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
-      <div style={{width:28,height:28,border:"2px solid #1a1a1a",borderTop:"2px solid #1DB954",borderRadius:"50%",animation:"spin 0.8s linear infinite",marginBottom:14}}/>
-      <p style={{color:"#2a2a2a",fontSize:11,fontFamily:"monospace",letterSpacing:2,textTransform:"uppercase"}}>{msg}</p>
+    <div style={{minHeight:"100vh",background:"#0c0c0c",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
+      <div style={{width:32,height:32,border:"2px solid #1e1e1e",borderTop:"2px solid #1DB954",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
+      <p style={{color:"#333",fontSize:12,fontFamily:"'JetBrains Mono',monospace",letterSpacing:3,textTransform:"uppercase"}}>{msg}</p>
+    </div>
+  );
+}
+
+function StatPill({ label, value, color }) {
+  return (
+    <div style={{background:"#141414",border:"1px solid #1e1e1e",borderRadius:8,padding:"12px 16px",minWidth:120}}>
+      <div style={{fontSize:11,color:"#444",fontFamily:"'JetBrains Mono',monospace",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>{label}</div>
+      <div style={{fontSize:22,fontWeight:600,color:color||"#e8e8e8",fontFamily:"'Playfair Display',serif"}}>{value}</div>
+    </div>
+  );
+}
+
+function FeatureBar({ label, value, color }) {
+  const pct = Math.round(value * 100);
+  return (
+    <div style={{marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+        <span style={{fontSize:12,color:"#888",fontFamily:"'JetBrains Mono',monospace"}}>{label}</span>
+        <span style={{fontSize:12,color:"#444",fontFamily:"'JetBrains Mono',monospace"}}>{pct}%</span>
+      </div>
+      <div style={{height:3,background:"#1a1a1a",borderRadius:2}}>
+        <div style={{height:"100%",width:pct+"%",background:color||"#1DB954",borderRadius:2,transition:"width 1s ease"}}/>
+      </div>
+    </div>
+  );
+}
+
+function MoodMap({ tracks, features }) {
+  const size = 460, pad = 40;
+  const inner = size - pad*2;
+  const featureMap = {};
+  features.forEach(f => { if(f) featureMap[f.id] = f; });
+  const points = tracks.slice(0,40).map(t => {
+    const f = featureMap[t.id];
+    if (!f) return null;
+    return { x: pad + f.energy * inner, y: pad + (1-f.valence) * inner, name: t.name, artist: t.artists&&t.artists[0]&&t.artists[0].name, energy:f.energy, valence:f.valence };
+  }).filter(Boolean);
+
+  const [hovered, setHovered] = useState(null);
+
+  return (
+    <div style={{position:"relative"}}>
+      <svg width={size} height={size} style={{display:"block",maxWidth:"100%"}}>
+        {/* Grid */}
+        <line x1={pad} y1={size/2} x2={size-pad} y2={size/2} stroke="#1a1a1a" strokeWidth="1" strokeDasharray="4,4"/>
+        <line x1={size/2} y1={pad} x2={size/2} y2={size-pad} stroke="#1a1a1a" strokeWidth="1" strokeDasharray="4,4"/>
+        {/* Quadrant labels */}
+        <text x={pad+8} y={pad+16} style={{fontSize:10,fill:"#2a2a2a",fontFamily:"'JetBrains Mono',monospace"}}>TURBULENT</text>
+        <text x={size-pad-8} y={pad+16} textAnchor="end" style={{fontSize:10,fill:"#2a2a2a",fontFamily:"'JetBrains Mono',monospace"}}>EUPHORIC</text>
+        <text x={pad+8} y={size-pad-8} style={{fontSize:10,fill:"#2a2a2a",fontFamily:"'JetBrains Mono',monospace"}}>BROODING</text>
+        <text x={size-pad-8} y={size-pad-8} textAnchor="end" style={{fontSize:10,fill:"#2a2a2a",fontFamily:"'JetBrains Mono',monospace"}}>SERENE</text>
+        {/* Axis labels */}
+        <text x={size/2} y={size-6} textAnchor="middle" style={{fontSize:10,fill:"#333",fontFamily:"'JetBrains Mono',monospace"}}>← CALM · ENERGY · INTENSE →</text>
+        {/* Points */}
+        {points.map((p,i) => (
+          <circle key={i} cx={p.x} cy={p.y} r={hovered===i?7:5}
+            fill={hovered===i?"#1DB954":"rgba(29,185,84,0.5)"}
+            stroke={hovered===i?"#1DB954":"rgba(29,185,84,0.2)"}
+            strokeWidth="1"
+            style={{cursor:"pointer",transition:"r 0.1s, fill 0.1s"}}
+            onMouseEnter={()=>setHovered(i)} onMouseLeave={()=>setHovered(null)}/>
+        ))}
+      </svg>
+      {hovered !== null && points[hovered] && (
+        <div style={{position:"absolute",top:points[hovered].y-48,left:Math.min(points[hovered].x+10,size-180),background:"#141414",border:"1px solid #2a2a2a",borderRadius:6,padding:"8px 12px",pointerEvents:"none",zIndex:10,minWidth:160}}>
+          <div style={{fontSize:13,color:"#e8e8e8",fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:160}}>{points[hovered].name}</div>
+          <div style={{fontSize:11,color:"#555",marginTop:2}}>{points[hovered].artist}</div>
+          <div style={{fontSize:10,color:"#333",marginTop:4,fontFamily:"'JetBrains Mono',monospace"}}>
+            E {Math.round(points[hovered].energy*100)} · V {Math.round(points[hovered].valence*100)}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 function RadarChart({ data }) {
-  const size=220, cx=110, cy=110, r=78;
-  const keys = Object.keys(data), n = keys.length;
-  const pts = keys.map((k,i) => {
-    const a = (i/n)*Math.PI*2 - Math.PI/2, val = data[k]/10;
-    return { x:cx+r*val*Math.cos(a), y:cy+r*val*Math.sin(a), lx:cx+(r+30)*Math.cos(a), ly:cy+(r+30)*Math.sin(a), label:k };
+  const size=260,cx=130,cy=130,r=90;
+  const keys=Object.keys(data),n=keys.length;
+  const pts=keys.map((k,i)=>{
+    const a=(i/n)*Math.PI*2-Math.PI/2,val=data[k]/10;
+    return{x:cx+r*val*Math.cos(a),y:cy+r*val*Math.sin(a),lx:cx+(r+34)*Math.cos(a),ly:cy+(r+34)*Math.sin(a),label:k};
   });
   return (
     <svg width={size} height={size} style={{overflow:"visible"}}>
-      {[0.25,0.5,0.75,1].map(lvl =>
-        <polygon key={lvl} points={keys.map((_,i)=>{ const a=(i/n)*Math.PI*2-Math.PI/2; return (cx+r*lvl*Math.cos(a))+","+(cy+r*lvl*Math.sin(a)); }).join(" ")} fill="none" stroke="#1e1e1e" strokeWidth="1"/>
-      )}
-      {keys.map((_,i) => { const a=(i/n)*Math.PI*2-Math.PI/2; return <line key={i} x1={cx} y1={cy} x2={cx+r*Math.cos(a)} y2={cy+r*Math.sin(a)} stroke="#1e1e1e" strokeWidth="1"/>; })}
-      <polygon points={pts.map(p=>p.x+","+p.y).join(" ")} fill="rgba(29,185,84,0.15)" stroke="#1DB954" strokeWidth="2"/>
-      {pts.map((p,i) => <circle key={i} cx={p.x} cy={p.y} r="4" fill="#1DB954"/>)}
-      {pts.map((p,i) => <text key={i} x={p.lx} y={p.ly} textAnchor="middle" dominantBaseline="middle" style={{fontSize:9,fill:"#555",fontFamily:"monospace",textTransform:"uppercase",letterSpacing:1}}>{p.label}</text>)}
+      {[0.25,0.5,0.75,1].map(lvl=>(
+        <polygon key={lvl} points={keys.map((_,i)=>{const a=(i/n)*Math.PI*2-Math.PI/2;return(cx+r*lvl*Math.cos(a))+","+(cy+r*lvl*Math.sin(a));}).join(" ")} fill="none" stroke="#1a1a1a" strokeWidth="1"/>
+      ))}
+      {keys.map((_,i)=>{const a=(i/n)*Math.PI*2-Math.PI/2;return<line key={i} x1={cx} y1={cy} x2={cx+r*Math.cos(a)} y2={cy+r*Math.sin(a)} stroke="#1a1a1a" strokeWidth="1"/>;  })}
+      <polygon points={pts.map(p=>p.x+","+p.y).join(" ")} fill="rgba(29,185,84,0.12)" stroke="#1DB954" strokeWidth="2"/>
+      {pts.map((p,i)=><circle key={i} cx={p.x} cy={p.y} r="4" fill="#1DB954"/>)}
+      {pts.map((p,i)=><text key={i} x={p.lx} y={p.ly} textAnchor="middle" dominantBaseline="middle" style={{fontSize:9,fill:"#555",fontFamily:"'JetBrains Mono',monospace",textTransform:"uppercase",letterSpacing:1}}>{p.label}</text>)}
     </svg>
   );
 }
 
 function GenreCloud({ genres }) {
-  const max = genres[0] ? genres[0][1] : 1;
+  const max=genres[0]?genres[0][1]:1;
   return (
-    <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-      {genres.map(([name,count]) => {
-        const col = genreColor(name);
-        return <span key={name} style={{fontSize:10+(count/max)*10,color:col,fontFamily:"monospace",opacity:0.6+(count/max)*0.4,letterSpacing:"0.5px",textShadow:"0 0 16px "+col+"50"}}>{name}</span>;
+    <div style={{display:"flex",flexWrap:"wrap",gap:10,lineHeight:1.4}}>
+      {genres.map(([name,count])=>{
+        const col=genreColor(name), size=11+(count/max)*12;
+        return <span key={name} style={{fontSize:size,color:col,fontFamily:"'Inter',sans-serif",fontWeight:400,opacity:0.55+(count/max)*0.45,letterSpacing:"0.3px",textShadow:"0 0 20px "+col+"40",cursor:"default"}}>{name}</span>;
       })}
     </div>
   );
 }
 
-function ArtistRow({ artist, rank, isNew, isGone }) {
-  const img = artist.images && (artist.images[2]||artist.images[1]||artist.images[0]);
+function ArtistRow({ artist, rank, isNew, isGone, extra }) {
+  const img=artist.images&&(artist.images[2]||artist.images[1]||artist.images[0]);
+  const pop=artist.popularity||0;
   return (
-    <div style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",borderBottom:"1px solid #111",opacity:isGone?0.3:1}}>
-      <span style={{width:20,textAlign:"right",color:"#333",fontSize:11,flexShrink:0}}>{rank}</span>
-      {img ? <img src={img.url} alt="" style={{width:36,height:36,borderRadius:"50%",objectFit:"cover",flexShrink:0}}/> : <div style={{width:36,height:36,borderRadius:"50%",background:"#1a1a1a",flexShrink:0}}/>}
+    <div className="artist-row" style={{display:"flex",alignItems:"center",gap:12,padding:"8px 10px",opacity:isGone?0.3:1}}>
+      <span style={{width:24,textAlign:"right",color:"#2a2a2a",fontSize:12,flexShrink:0,fontFamily:"'JetBrains Mono',monospace"}}>{rank}</span>
+      {img?<img src={img.url} alt="" style={{width:40,height:40,borderRadius:"50%",objectFit:"cover",flexShrink:0}}/>:<div style={{width:40,height:40,borderRadius:"50%",background:"#1a1a1a",flexShrink:0}}/>}
       <div style={{flex:1,minWidth:0}}>
-        <div style={{fontSize:13,color:isGone?"#444":"#ddd",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{artist.name}</div>
-        <div style={{fontSize:10,color:"#444",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{artist.genres&&artist.genres.slice(0,2).join(" · ")}</div>
+        <div style={{fontSize:14,color:isGone?"#444":"#e0e0e0",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{artist.name}</div>
+        <div style={{fontSize:11,color:"#444",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontFamily:"'JetBrains Mono',monospace"}}>{artist.genres&&artist.genres.slice(0,2).join(" · ")}</div>
       </div>
-      {isNew && <span style={{fontSize:9,color:"#1DB954",border:"1px solid #1DB95450",borderRadius:100,padding:"2px 7px",flexShrink:0}}>NEW</span>}
-      {isGone && <span style={{fontSize:9,color:"#444",border:"1px solid #33333360",borderRadius:100,padding:"2px 7px",flexShrink:0}}>FADED</span>}
-    </div>
-  );
-}
-
-function ClaudeAnalysis({ data }) {
-  const [text, setText] = useState("");
-  const [loading, setLoading] = useState(false);
-  const ran = useRef(false);
-  useEffect(() => {
-    if (ran.current || !data) return;
-    ran.current = true;
-    setLoading(true);
-    const allTimeArtists = data.artists.long.slice(0,20).map(a=>a.name).join(", ");
-    const recentArtists = data.artists.short.slice(0,10).map(a=>a.name).join(", ");
-    const allTimeGenres = aggregateGenres(data.artists.long).slice(0,15).map(x=>x[0]).join(", ");
-    const recentGenres = aggregateGenres(data.artists.short).slice(0,10).map(x=>x[0]).join(", ");
-    const newArrivals = newIn(data.artists.short, data.artists.long).slice(0,5).map(a=>a.name).join(", ");
-    const topTracks = data.tracks.long.slice(0,10).map(t=>t.name+" by "+(t.artists&&t.artists[0]&&t.artists[0].name)).join(", ");
-    const prompt = `You are a music critic and cultural analyst. Analyze this person's Spotify data and write a rich portrait of their musical taste.
-
-ALL-TIME TOP ARTISTS: ${allTimeArtists}
-RECENT TOP ARTISTS (last 4 weeks): ${recentArtists}
-ALL-TIME GENRES: ${allTimeGenres}
-RECENT GENRES: ${recentGenres}
-RECENTLY EMERGED: ${newArrivals||"none notable"}
-ALL-TIME TOP TRACKS: ${topTracks}
-
-Write 4 sections with these exact headers (##):
-## Your Sound Identity
-2-3 sentences on their overall musical identity. Vivid, specific, not generic.
-
-## How Your Taste Has Evolved
-2-3 sentences on the shift from all-time to recent — what trajectory does it suggest?
-
-## The Genres That Define You
-A paragraph on their genre world in cultural/critical terms — what do these genres mean together?
-
-## What Your Taste Says About You
-2-3 bold, specific sentences on the personality implied. No clichés.
-
-Write like a good music journalist. Never say "eclectic taste".`;
-    askClaude(prompt).then(t => { setText(t); setLoading(false); }).catch(() => { setText("Claude analysis unavailable."); setLoading(false); });
-  }, [data]);
-
-  if (loading) return (
-    <div style={{padding:"32px 0",textAlign:"center"}}>
-      <div style={{display:"inline-block",width:24,height:24,border:"2px solid #1a1a1a",borderTop:"2px solid #1DB954",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
-      <p style={{color:"#444",fontSize:12,marginTop:12,fontFamily:"monospace"}}>analysing your taste...</p>
-    </div>
-  );
-  const sections = text.split(/^## /m).filter(Boolean).map(s => { const nl=s.indexOf("\n"); return {title:s.slice(0,nl).trim(),body:s.slice(nl+1).trim()}; });
-  return (
-    <div style={{paddingTop:8}}>
-      {sections.map((s,i) => (
-        <div key={i} style={{marginBottom:28}}>
-          <div style={{fontSize:9,letterSpacing:"2px",textTransform:"uppercase",color:"#1DB954",marginBottom:8,fontFamily:"monospace"}}>{s.title}</div>
-          <p style={{color:"#aaa",fontSize:14,lineHeight:1.8,margin:0,fontFamily:"Georgia,serif"}}>{s.body}</p>
+      {extra && <div style={{fontSize:11,color:"#333",fontFamily:"'JetBrains Mono',monospace",flexShrink:0}}>#{extra}</div>}
+      <div style={{width:60,flexShrink:0}}>
+        <div style={{height:2,background:"#1a1a1a",borderRadius:1}}>
+          <div style={{height:"100%",width:pop+"%",background:"#1DB95460",borderRadius:1}}/>
         </div>
-      ))}
-      {!sections.length && text && <p style={{color:"#555",fontSize:13}}>{text}</p>}
+        <div style={{fontSize:9,color:"#2a2a2a",marginTop:2,fontFamily:"'JetBrains Mono',monospace",textAlign:"right"}}>{pop}</div>
+      </div>
+      {isNew&&<span style={{fontSize:9,color:"#1DB954",border:"1px solid #1DB95440",borderRadius:100,padding:"2px 8px",flexShrink:0,fontFamily:"'JetBrains Mono',monospace"}}>NEW</span>}
+      {isGone&&<span style={{fontSize:9,color:"#333",border:"1px solid #2a2a2a",borderRadius:100,padding:"2px 8px",flexShrink:0,fontFamily:"'JetBrains Mono',monospace"}}>FADED</span>}
     </div>
   );
 }
 
-// ── MAIN ──────────────────────────────────────────────────────────────────────
+function TrackRow({ track, rank }) {
+  const img=track.album&&track.album.images&&track.album.images[2];
+  const ms=track.duration_ms;
+  const dur=ms?Math.floor(ms/60000)+":"+String(Math.floor((ms%60000)/1000)).padStart(2,"0"):"";
+  const pop=track.popularity||0;
+  return (
+    <div className="artist-row" style={{display:"flex",alignItems:"center",gap:12,padding:"8px 10px"}}>
+      <span style={{width:24,textAlign:"right",color:"#2a2a2a",fontSize:12,flexShrink:0,fontFamily:"'JetBrains Mono',monospace"}}>{rank}</span>
+      {img?<img src={img.url} alt="" style={{width:40,height:40,borderRadius:4,objectFit:"cover",flexShrink:0}}/>:<div style={{width:40,height:40,borderRadius:4,background:"#1a1a1a",flexShrink:0}}/>}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:14,color:"#e0e0e0",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{track.name}</div>
+        <div style={{fontSize:11,color:"#444",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontFamily:"'JetBrains Mono',monospace"}}>{track.artists&&track.artists.map(a=>a.name).join(", ")}</div>
+      </div>
+      <div style={{width:60,flexShrink:0}}>
+        <div style={{height:2,background:"#1a1a1a",borderRadius:1}}>
+          <div style={{height:"100%",width:pop+"%",background:"#1DB95460",borderRadius:1}}/>
+        </div>
+        <div style={{fontSize:9,color:"#2a2a2a",marginTop:2,fontFamily:"'JetBrains Mono',monospace",textAlign:"right"}}>{dur}</div>
+      </div>
+    </div>
+  );
+}
+
+function SectionLabel({ children }) {
+  return <div style={{fontSize:10,letterSpacing:"3px",textTransform:"uppercase",color:"#2a2a2a",marginBottom:18,fontFamily:"'JetBrains Mono',monospace",fontWeight:500}}>{children}</div>;
+}
+
+function Card({ children, style }) {
+  return <div style={{background:"#111",border:"1px solid #1a1a1a",borderRadius:10,padding:"20px 24px",...style}}>{children}</div>;
+}
+
+// ── MAIN APP ──────────────────────────────────────────────────────────────────
 function App() {
   const [token, setToken] = useState(null);
-  const [phase, setPhase] = useState("init"); // init | login | loading | ready | error
+  const [phase, setPhase] = useState("init");
   const [error, setError] = useState(null);
   const [profile, setProfile] = useState(null);
   const [data, setData] = useState(null);
+  const [audioFeatures, setAudioFeatures] = useState([]);
   const [activeTab, setActiveTab] = useState("identity");
+  const [timeRange, setTimeRange] = useState("long");
   const pollRef = useRef(null);
 
-  useEffect(() => {
-    // Are we the popup callback page?
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get("code");
+  useEffect(()=>{
+    const params=new URLSearchParams(window.location.search);
+    const code=params.get("code");
     if (code) {
-      window.history.replaceState({}, "", window.location.pathname);
+      window.history.replaceState({},"",window.location.pathname);
       setPhase("loading");
-      exchangeCode(code).then(t => {
+      exchangeCode(code).then(t=>{
         if (t) {
-          // Store for opener polling
-          sessionStorage.setItem("sp_token", t);
-          // If we're a popup, close and let opener pick it up
-          if (window.opener) {
-            window.opener.sessionStorage.setItem("sp_token", t);
-            window.close();
-          } else {
-            setToken(t);
-            setPhase("ready");
-          }
-        } else {
-          setError("Token exchange failed.");
-          setPhase("error");
-        }
+          sessionStorage.setItem("sp_token",t);
+          if (window.opener) { try { window.opener.sessionStorage.setItem("sp_token",t); } catch(e){} window.close(); }
+          else { setToken(t); }
+        } else { setError("Token exchange failed."); setPhase("error"); }
       });
       return;
     }
-
-    // Normal load — check for stored token
-    const stored = sessionStorage.getItem("sp_token");
+    const stored=sessionStorage.getItem("sp_token");
     if (stored) { setToken(stored); setPhase("ready"); }
     else setPhase("login");
-  }, []);
+  },[]);
 
-  // Poll for token after popup auth
   function startPolling() {
-    pollRef.current = setInterval(() => {
-      const t = sessionStorage.getItem("sp_token");
-      if (t) {
-        clearInterval(pollRef.current);
-        setToken(t);
-        setPhase("ready");
-      }
-    }, 600);
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current=setInterval(()=>{
+      const t=sessionStorage.getItem("sp_token");
+      if (t) { clearInterval(pollRef.current); setToken(t); setPhase("ready"); }
+    },600);
   }
 
-  // Fetch Spotify data once we have token
-  useEffect(() => {
-    if (!token || data) return;
+  useEffect(()=>{
+    if (!token||data) return;
     setPhase("loading");
     Promise.all([
-      sGet("/me", token),
-      fetchAllRanges("artists", token),
-      fetchAllRanges("tracks", token),
-    ]).then(([prof, artists, tracks]) => {
+      sGet("/me",token),
+      fetchAllRanges("artists",token),
+      fetchAllRanges("tracks",token),
+    ]).then(async ([prof,artists,tracks])=>{
       setProfile(prof);
-      setData({ artists, tracks });
+      // Fetch audio features for long-term top tracks
+      const trackIds=(tracks.long||[]).map(t=>t.id);
+      let features=[];
+      try { features=await fetchAudioFeatures(trackIds,token); } catch(e){}
+      setAudioFeatures(features);
+      setData({artists,tracks});
       setPhase("ready");
-    }).catch(e => {
-      if (e.message === "401") { sessionStorage.removeItem("sp_token"); setToken(null); setPhase("login"); }
-      else { setError("Failed to load Spotify data."); setPhase("error"); }
+    }).catch(e=>{
+      if (e.message==="401") { sessionStorage.removeItem("sp_token"); setToken(null); setPhase("login"); }
+      else { setError("Failed to load data: "+e.message); setPhase("error"); }
     });
-  }, [token]);
+  },[token]);
 
-  function logout() {
-    sessionStorage.removeItem("sp_token");
-    setToken(null); setData(null); setProfile(null); setPhase("login");
-  }
+  function logout() { sessionStorage.removeItem("sp_token"); setToken(null); setData(null); setProfile(null); setPhase("login"); }
+  async function handleConnect() { await doAuth(); startPolling(); }
 
-  async function handleConnect() {
-    await doAuth();
-    startPolling();
-  }
-
-  if (phase === "init" || phase === "loading") return <Loader msg={phase === "init" ? "initialising" : "digging through your crates"}/>;
-  if (phase === "error") return (
-    <div style={{minHeight:"100vh",background:"#080808",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
-      <p style={{color:"#ff4444",marginBottom:16}}>{error}</p>
-      <button style={btnS} onClick={() => setPhase("login")}>Retry</button>
-    </div>
-  );
-
-  if (phase === "login") return (
-    <div style={{minHeight:"100vh",background:"#080808",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
-      <div style={{textAlign:"center",animation:"fadeUp 0.5s ease",maxWidth:320}}>
-        <div style={{fontSize:40,marginBottom:20,color:"#1DB954"}}>◈</div>
-        <h1 style={{fontSize:28,fontWeight:700,color:"#fff",margin:"0 0 10px",letterSpacing:"-0.5px",fontFamily:"Georgia,serif"}}>Cratelog</h1>
-        <p style={{color:"#444",fontSize:13,lineHeight:1.7,marginBottom:28,fontFamily:"monospace"}}>
-          Map how your music has evolved.<br/>Understand the sound that defines you.
-        </p>
+  if (phase==="init"||phase==="loading") return <Loader msg={phase==="init"?"initialising":"digging through your crates"}/>;
+  if (phase==="error") return <div style={{minHeight:"100vh",background:"#0c0c0c",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}><p style={{color:"#ff5555"}}>{error}</p><button style={btnS} onClick={()=>setPhase("login")}>Retry</button></div>;
+  if (phase==="login") return (
+    <div style={{minHeight:"100vh",background:"#0c0c0c",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{textAlign:"center",animation:"fadeUp 0.5s ease",maxWidth:380}}>
+        <div style={{fontSize:44,marginBottom:24,color:"#1DB954",fontFamily:"'Playfair Display',serif"}}>◈</div>
+        <h1 style={{fontSize:36,fontWeight:400,color:"#e8e8e8",margin:"0 0 12px",fontFamily:"'Playfair Display',serif",letterSpacing:"-0.5px"}}>Cratelog</h1>
+        <p style={{color:"#444",fontSize:14,lineHeight:1.7,marginBottom:36,fontFamily:"'Inter',sans-serif"}}>Map how your music has evolved.<br/>Understand the sound that defines you.</p>
         <button style={btnS} onClick={handleConnect}>Connect Spotify</button>
-        <p style={{color:"#222",fontSize:11,marginTop:14,fontFamily:"monospace"}}>opens a popup window</p>
+        <p style={{color:"#222",fontSize:11,marginTop:14,fontFamily:"'JetBrains Mono',monospace",letterSpacing:1}}>OPENS A POPUP</p>
       </div>
     </div>
   );
 
   if (!data) return <Loader msg="loading"/>;
 
+  // Derived
+  const artists = data.artists[timeRange];
+  const tracks = data.tracks[timeRange];
   const longGenres = aggregateGenres(data.artists.long);
   const shortGenres = aggregateGenres(data.artists.short);
-  const vibes = vibeFromGenres(longGenres);
   const newArtists = newIn(data.artists.short, data.artists.long);
   const fadedArtists = newIn(data.artists.long.slice(0,20), data.artists.short);
   const stableArtists = inCommon(data.artists.long.slice(0,20), data.artists.short.slice(0,20));
-  const tabs = [{id:"identity",label:"Identity"},{id:"evolution",label:"Evolution"},{id:"genres",label:"Genres"},{id:"vibe",label:"Vibe"}];
+  const identitySections = generateAnalysis(data);
+  const obsScore = obscurityScore(data.artists.long);
+  const obsLabel = obscurityLabel(obsScore);
+
+  // Audio features averages
+  const featMap = {};
+  audioFeatures.forEach(f=>{ if(f) featMap[f.id]=f; });
+  const featValues = data.tracks.long.slice(0,50).map(t=>featMap[t.id]).filter(Boolean);
+  const avgFeatures = {
+    energy: avg(featValues.map(f=>f.energy)),
+    valence: avg(featValues.map(f=>f.valence)),
+    danceability: avg(featValues.map(f=>f.danceability)),
+    acousticness: avg(featValues.map(f=>f.acousticness)),
+    instrumentalness: avg(featValues.map(f=>f.instrumentalness)),
+    speechiness: avg(featValues.map(f=>f.speechiness)),
+  };
+  const avgTempo = avg(featValues.map(f=>f.tempo));
+
+  const vibes = {
+    "Energy": Math.round(avgFeatures.energy*10)||5,
+    "Mood": Math.round(avgFeatures.valence*10)||4,
+    "Dance": Math.round(avgFeatures.danceability*10)||4,
+    "Acoustic": Math.round(avgFeatures.acousticness*10)||3,
+    "Instrum.": Math.round(avgFeatures.instrumentalness*10)||3,
+  };
+
+  const tabs=[
+    {id:"identity",label:"Identity"},
+    {id:"evolution",label:"Evolution"},
+    {id:"genres",label:"Genres"},
+    {id:"mood",label:"Mood Map"},
+    {id:"audio",label:"Audio DNA"},
+    {id:"tracks",label:"Top Tracks"},
+  ];
+
+  const timeRanges=[["short","4 Weeks"],["medium","6 Months"],["long","All Time"]];
 
   return (
-    <div style={{minHeight:"100vh",background:"#080808"}}>
-      {/* Header */}
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px",borderBottom:"1px solid #111"}}>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <span style={{color:"#1DB954",fontSize:16}}>◈</span>
-          <div>
-            <div style={{fontSize:10,color:"#2a2a2a",letterSpacing:"2px",fontFamily:"monospace"}}>CRATELOG</div>
-            <div style={{fontSize:13,color:"#555",fontFamily:"monospace"}}>{profile&&profile.display_name}</div>
-          </div>
-        </div>
-        <button onClick={logout} style={{background:"none",border:"1px solid #1a1a1a",color:"#333",borderRadius:100,padding:"5px 12px",fontSize:11,cursor:"pointer",fontFamily:"monospace"}}>disconnect</button>
-      </div>
+    <div style={{minHeight:"100vh",background:"#0c0c0c",display:"flex",flexDirection:"column"}}>
 
-      {/* Tabs */}
-      <div style={{display:"flex",borderBottom:"1px solid #111",overflowX:"auto"}}>
-        {tabs.map(t => (
-          <button key={t.id} onClick={() => setActiveTab(t.id)}
-            style={{flex:1,background:"none",border:"none",color:activeTab===t.id?"#1DB954":"#2a2a2a",padding:"13px 8px",fontSize:11,cursor:"pointer",letterSpacing:"2px",textTransform:"uppercase",fontFamily:"monospace",borderBottom:activeTab===t.id?"2px solid #1DB954":"2px solid transparent",whiteSpace:"nowrap"}}>
+      {/* Top nav */}
+      <header style={{borderBottom:"1px solid #141414",padding:"0 32px",display:"flex",alignItems:"center",justifyContent:"space-between",height:56,position:"sticky",top:0,background:"#0c0c0cee",backdropFilter:"blur(12px)",zIndex:100}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <span style={{color:"#1DB954",fontSize:18,fontFamily:"'Playfair Display',serif"}}>◈</span>
+          <span style={{fontSize:13,color:"#e8e8e8",fontFamily:"'Playfair Display',serif",fontWeight:600,letterSpacing:"0.5px"}}>Cratelog</span>
+          {profile&&<span style={{fontSize:12,color:"#2a2a2a",fontFamily:"'JetBrains Mono',monospace",marginLeft:8}}>/ {profile.display_name}</span>}
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:24}}>
+          <div style={{display:"flex",gap:2,background:"#111",border:"1px solid #1a1a1a",borderRadius:6,padding:3}}>
+            {timeRanges.map(([v,l])=>(
+              <button key={v} onClick={()=>setTimeRange(v)} style={{background:timeRange===v?"#1a1a1a":"transparent",border:"none",color:timeRange===v?"#e8e8e8":"#333",padding:"4px 12px",borderRadius:4,fontSize:11,cursor:"pointer",fontFamily:"'JetBrains Mono',monospace",letterSpacing:1,transition:"all 0.15s"}}>{l}</button>
+            ))}
+          </div>
+          <button onClick={logout} style={{background:"none",border:"1px solid #1a1a1a",color:"#333",borderRadius:6,padding:"5px 14px",fontSize:11,cursor:"pointer",fontFamily:"'JetBrains Mono',monospace",letterSpacing:1}}>DISCONNECT</button>
+        </div>
+      </header>
+
+      {/* Tab bar */}
+      <div style={{borderBottom:"1px solid #141414",padding:"0 32px",display:"flex",gap:0,background:"#0c0c0c"}}>
+        {tabs.map(t=>(
+          <button key={t.id} className="tab-btn" onClick={()=>setActiveTab(t.id)}
+            style={{background:"none",border:"none",color:activeTab===t.id?"#e8e8e8":"#333",padding:"14px 20px",fontSize:12,cursor:"pointer",letterSpacing:"1.5px",textTransform:"uppercase",fontFamily:"'JetBrains Mono',monospace",borderBottom:activeTab===t.id?"2px solid #1DB954":"2px solid transparent",marginBottom:-1}}>
             {t.label}
           </button>
         ))}
       </div>
 
-      {/* Body */}
-      <div style={{padding:"24px 20px 48px"}}>
+      {/* Main content — two-column layout */}
+      <main style={{flex:1,padding:"32px 32px 64px",maxWidth:1280,width:"100%",margin:"0 auto"}}>
 
+        {/* ── IDENTITY ── */}
         {activeTab==="identity" && (
-          <div>
-            <div style={lblS}>AI Portrait of Your Taste</div>
-            <ClaudeAnalysis data={data}/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
+            {/* Left col: stats overview */}
+            <div style={{display:"flex",flexDirection:"column",gap:20}}>
+              <Card>
+                <SectionLabel>Taste Profile</SectionLabel>
+                <div style={{display:"flex",flexWrap:"wrap",gap:12,marginBottom:24}}>
+                  <StatPill label="Obscurity" value={obsScore+"%"} color="#1DB954"/>
+                  <StatPill label="Label" value={obsLabel} color="#e8e8e8"/>
+                  <StatPill label="Top Artists" value={data.artists.long.length}/>
+                  <StatPill label="Avg Popularity" value={Math.round(avg(data.artists.long.map(a=>a.popularity||50)))}/>
+                </div>
+                <SectionLabel>Listening Personality</SectionLabel>
+                <div style={{display:"flex",justifyContent:"center",paddingTop:8}}>
+                  <RadarChart data={vibes}/>
+                </div>
+              </Card>
+              <Card>
+                <SectionLabel>Top Artists · {timeRange==="short"?"4 Weeks":timeRange==="medium"?"6 Months":"All Time"}</SectionLabel>
+                {artists.slice(0,8).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1}/>)}
+              </Card>
+            </div>
+            {/* Right col: text analysis */}
+            <div style={{display:"flex",flexDirection:"column",gap:20}}>
+              <Card>
+                <SectionLabel>Sound Portrait</SectionLabel>
+                {identitySections.map((s,i)=>(
+                  <div key={i} style={{marginBottom:28}}>
+                    <div style={{fontSize:9,letterSpacing:"2px",textTransform:"uppercase",color:"#1DB954",marginBottom:10,fontFamily:"'JetBrains Mono',monospace"}}>{s.title}</div>
+                    <p style={{color:"#888",fontSize:14,lineHeight:1.85,margin:0,fontFamily:"'Playfair Display',serif"}}>{s.body}</p>
+                  </div>
+                ))}
+              </Card>
+            </div>
           </div>
         )}
 
+        {/* ── EVOLUTION ── */}
         {activeTab==="evolution" && (
-          <div>
-            <div style={lblS}>Taste Drift · All Time → Last 4 Weeks</div>
-            <p style={{fontSize:12,color:"#333",marginBottom:20,lineHeight:1.6,fontFamily:"monospace"}}>
-              {stableArtists.length} constants · {newArtists.length} newly emerged · {fadedArtists.length} fading
-            </p>
-            {newArtists.length > 0 && (
-              <div style={{marginBottom:24}}>
-                <div style={{fontSize:9,letterSpacing:"2px",color:"#1DB954",marginBottom:10,fontFamily:"monospace"}}>RECENTLY EMERGED</div>
-                {newArtists.slice(0,8).map((a,i) => <ArtistRow key={a.id} artist={a} rank={i+1} isNew={true}/>)}
-              </div>
-            )}
-            <div style={{marginBottom:24}}>
-              <div style={{fontSize:9,letterSpacing:"2px",color:"#666",marginBottom:10,fontFamily:"monospace"}}>LONG-TERM CONSTANTS</div>
-              {stableArtists.slice(0,8).map((a,i) => <ArtistRow key={a.id} artist={a} rank={i+1}/>)}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
+            <div style={{display:"flex",flexDirection:"column",gap:20}}>
+              {newArtists.length>0&&(
+                <Card>
+                  <SectionLabel>Recently Emerged</SectionLabel>
+                  <p style={{fontSize:12,color:"#333",marginBottom:16,fontFamily:"'JetBrains Mono',monospace",lineHeight:1.6}}>New to your rotation in the last 4 weeks</p>
+                  {newArtists.slice(0,10).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1} isNew={true}/>)}
+                </Card>
+              )}
+              {fadedArtists.length>0&&(
+                <Card>
+                  <SectionLabel>Fading From Rotation</SectionLabel>
+                  {fadedArtists.slice(0,8).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1} isGone={true}/>)}
+                </Card>
+              )}
             </div>
-            {fadedArtists.length > 0 && (
-              <div style={{marginBottom:28}}>
-                <div style={{fontSize:9,letterSpacing:"2px",color:"#333",marginBottom:10,fontFamily:"monospace"}}>FADING FROM ROTATION</div>
-                {fadedArtists.slice(0,6).map((a,i) => <ArtistRow key={a.id} artist={a} rank={i+1} isGone={true}/>)}
-              </div>
-            )}
-            <div style={lblS}>Genre Shift</div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
-              <div>
-                <div style={{fontSize:9,color:"#333",letterSpacing:2,marginBottom:10,fontFamily:"monospace"}}>ALL TIME</div>
-                <GenreCloud genres={longGenres.slice(0,12)}/>
-              </div>
-              <div>
-                <div style={{fontSize:9,color:"#1DB954",letterSpacing:2,marginBottom:10,fontFamily:"monospace"}}>RECENT</div>
-                <GenreCloud genres={shortGenres.slice(0,12)}/>
-              </div>
+            <div style={{display:"flex",flexDirection:"column",gap:20}}>
+              <Card>
+                <SectionLabel>Long-Term Constants</SectionLabel>
+                <p style={{fontSize:12,color:"#333",marginBottom:16,fontFamily:"'JetBrains Mono',monospace",lineHeight:1.6}}>{stableArtists.length} artists in both your all-time and recent top 20</p>
+                {stableArtists.slice(0,10).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1}/>)}
+              </Card>
+              <Card>
+                <SectionLabel>Genre Shift</SectionLabel>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginTop:8}}>
+                  <div>
+                    <div style={{fontSize:9,color:"#2a2a2a",letterSpacing:2,marginBottom:12,fontFamily:"'JetBrains Mono',monospace"}}>ALL TIME</div>
+                    <GenreCloud genres={longGenres.slice(0,10)}/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:9,color:"#1DB954",letterSpacing:2,marginBottom:12,fontFamily:"'JetBrains Mono',monospace"}}>RECENT</div>
+                    <GenreCloud genres={shortGenres.slice(0,10)}/>
+                  </div>
+                </div>
+              </Card>
             </div>
           </div>
         )}
 
+        {/* ── GENRES ── */}
         {activeTab==="genres" && (
-          <div>
-            <div style={lblS}>Your Genre Universe</div>
-            <GenreCloud genres={longGenres}/>
-            <div style={{marginTop:28}}>
-              <div style={lblS}>Top 20 Genres by Frequency</div>
-              {longGenres.map(([name,count],i) => {
-                const max = longGenres[0][1];
-                return (
-                  <div key={name} style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-                    <span style={{width:16,fontSize:10,color:"#2a2a2a",textAlign:"right",fontFamily:"monospace"}}>{i+1}</span>
-                    <div style={{flex:1}}>
-                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                        <span style={{fontSize:12,color:"#888",fontFamily:"monospace"}}>{name}</span>
-                        <span style={{fontSize:10,color:"#2a2a2a",fontFamily:"monospace"}}>{count}</span>
-                      </div>
-                      <div style={{height:2,background:"#111",borderRadius:1}}>
-                        <div style={{height:"100%",width:((count/max)*100)+"%",background:genreColor(name),borderRadius:1}}/>
+          <div style={{display:"grid",gridTemplateColumns:"3fr 2fr",gap:24}}>
+            <div style={{display:"flex",flexDirection:"column",gap:20}}>
+              <Card>
+                <SectionLabel>Genre Universe</SectionLabel>
+                <GenreCloud genres={longGenres}/>
+              </Card>
+              <Card>
+                <SectionLabel>Genre Frequency</SectionLabel>
+                {longGenres.map(([name,count],i)=>{
+                  const max=longGenres[0][1];
+                  return (
+                    <div key={name} style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
+                      <span style={{width:18,fontSize:11,color:"#2a2a2a",textAlign:"right",fontFamily:"'JetBrains Mono',monospace",flexShrink:0}}>{i+1}</span>
+                      <div style={{flex:1}}>
+                        <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                          <span style={{fontSize:13,color:"#888"}}>{name}</span>
+                          <span style={{fontSize:11,color:"#2a2a2a",fontFamily:"'JetBrains Mono',monospace"}}>{count}</span>
+                        </div>
+                        <div style={{height:2,background:"#1a1a1a",borderRadius:1}}>
+                          <div style={{height:"100%",width:((count/max)*100)+"%",background:genreColor(name),borderRadius:1}}/>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </Card>
             </div>
-          </div>
-        )}
-
-        {activeTab==="vibe" && (
-          <div>
-            <div style={lblS}>Listening Personality</div>
-            <div style={{display:"flex",justifyContent:"center",padding:"16px 0 8px"}}>
-              <RadarChart data={vibes}/>
-            </div>
-            <div style={{marginTop:8}}>
-              {Object.entries(vibes).map(([k,v]) => (
-                <div key={k} style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
-                  <span style={{width:110,fontSize:10,color:"#333",letterSpacing:1.5,textTransform:"uppercase",fontFamily:"monospace",flexShrink:0}}>{k}</span>
-                  <div style={{flex:1,height:3,background:"#111",borderRadius:2}}>
-                    <div style={{height:"100%",width:(v*10)+"%",background:"hsl("+(100+v*8)+",70%,50%)",borderRadius:2}}/>
+            <div>
+              <Card>
+                <SectionLabel>Obscurity Score</SectionLabel>
+                <div style={{textAlign:"center",padding:"24px 0"}}>
+                  <div style={{fontSize:72,fontWeight:600,color:"#1DB954",fontFamily:"'Playfair Display',serif",lineHeight:1}}>{obsScore}</div>
+                  <div style={{fontSize:14,color:"#888",marginTop:8,fontFamily:"'Playfair Display',serif",fontStyle:"italic"}}>{obsLabel}</div>
+                  <div style={{fontSize:11,color:"#2a2a2a",marginTop:16,fontFamily:"'JetBrains Mono',monospace",lineHeight:1.6}}>
+                    Based on avg artist popularity<br/>score of {Math.round(avg(data.artists.long.map(a=>a.popularity||50)))} / 100
                   </div>
-                  <span style={{width:20,fontSize:11,color:"#444",textAlign:"right",fontFamily:"monospace"}}>{v}</span>
                 </div>
-              ))}
-            </div>
-            <div style={{marginTop:28}}>
-              <div style={lblS}>All-Time Top Artists</div>
-              {data.artists.long.slice(0,15).map((a,i) => <ArtistRow key={a.id} artist={a} rank={i+1}/>)}
+                <div style={{marginTop:16}}>
+                  {[["Deep Underground","80+"],["Mostly Niche","65–79"],["Indie Adjacent","50–64"],["Mainstream Aware","35–49"],["Chart Familiar","0–34"]].map(([label,range])=>(
+                    <div key={label} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #141414"}}>
+                      <span style={{fontSize:12,color:obsLabel===label?"#e8e8e8":"#2a2a2a",fontWeight:obsLabel===label?500:400}}>{label}</span>
+                      <span style={{fontSize:11,color:"#2a2a2a",fontFamily:"'JetBrains Mono',monospace"}}>{range}</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
             </div>
           </div>
         )}
 
-      </div>
+        {/* ── MOOD MAP ── */}
+        {activeTab==="mood" && (
+          <div style={{display:"grid",gridTemplateColumns:"3fr 2fr",gap:24}}>
+            <Card>
+              <SectionLabel>Mood Map · Top 40 Tracks</SectionLabel>
+              <p style={{fontSize:12,color:"#333",marginBottom:20,fontFamily:"'JetBrains Mono',monospace",lineHeight:1.6}}>Each dot is a track — hover to identify. X axis = energy, Y axis = valence (mood).</p>
+              {audioFeatures.length>0
+                ? <MoodMap tracks={data.tracks.long} features={audioFeatures}/>
+                : <div style={{padding:"40px 0",textAlign:"center",color:"#333",fontFamily:"'JetBrains Mono',monospace",fontSize:12}}>Audio features unavailable</div>
+              }
+            </Card>
+            <div style={{display:"flex",flexDirection:"column",gap:20}}>
+              <Card>
+                <SectionLabel>Mood Summary</SectionLabel>
+                {avgFeatures.energy>0 && (
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:20}}>
+                    <StatPill label="Energy" value={Math.round(avgFeatures.energy*100)+"%"} color={avgFeatures.energy>0.6?"#f59e0b":"#1DB954"}/>
+                    <StatPill label="Positivity" value={Math.round(avgFeatures.valence*100)+"%"} color={avgFeatures.valence>0.5?"#1DB954":"#888"}/>
+                    <StatPill label="Dance" value={Math.round(avgFeatures.danceability*100)+"%"}/>
+                    <StatPill label="BPM" value={avgTempo?Math.round(avgTempo):"—"}/>
+                  </div>
+                )}
+                <div style={{fontSize:13,color:"#555",fontFamily:"'Playfair Display',serif",fontStyle:"italic",lineHeight:1.7}}>
+                  {avgFeatures.energy>0.65&&avgFeatures.valence>0.5?"High energy and generally positive — music that pushes forward.":
+                   avgFeatures.energy>0.65&&avgFeatures.valence<0.5?"Intense but melancholic — music with teeth and darkness.":
+                   avgFeatures.energy<0.45&&avgFeatures.valence>0.5?"Calm and warm — music for focus and reflection.":
+                   avgFeatures.energy<0.45&&avgFeatures.valence<0.5?"Slow, introspective, and heavy. Music that sits in the shadow.":
+                   "Balanced between light and dark, calm and intense."}
+                </div>
+              </Card>
+              <Card>
+                <SectionLabel>Quadrant Breakdown</SectionLabel>
+                {audioFeatures.length>0 && (() => {
+                  const featureMap={};
+                  audioFeatures.forEach(f=>{if(f)featureMap[f.id]=f;});
+                  const pts=data.tracks.long.slice(0,40).map(t=>featureMap[t.id]).filter(Boolean);
+                  const q={euphoric:0,turbulent:0,serene:0,brooding:0};
+                  pts.forEach(f=>{
+                    if(f.energy>0.5&&f.valence>0.5) q.euphoric++;
+                    else if(f.energy>0.5&&f.valence<0.5) q.turbulent++;
+                    else if(f.energy<0.5&&f.valence>0.5) q.serene++;
+                    else q.brooding++;
+                  });
+                  const total=pts.length||1;
+                  return Object.entries(q).map(([k,v])=>(
+                    <div key={k} style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
+                      <span style={{width:70,fontSize:11,color:"#555",textTransform:"uppercase",letterSpacing:1,fontFamily:"'JetBrains Mono',monospace",flexShrink:0}}>{k}</span>
+                      <div style={{flex:1,height:2,background:"#1a1a1a",borderRadius:1}}>
+                        <div style={{height:"100%",width:((v/total)*100)+"%",background:"#1DB954",borderRadius:1}}/>
+                      </div>
+                      <span style={{width:28,fontSize:11,color:"#333",textAlign:"right",fontFamily:"'JetBrains Mono',monospace"}}>{Math.round((v/total)*100)}%</span>
+                    </div>
+                  ));
+                })()}
+              </Card>
+            </div>
+          </div>
+        )}
+
+        {/* ── AUDIO DNA ── */}
+        {activeTab==="audio" && (
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
+            <Card>
+              <SectionLabel>Audio Features · All-Time Top 50</SectionLabel>
+              {avgFeatures.energy>0 ? (
+                <div>
+                  <FeatureBar label="Energy" value={avgFeatures.energy} color="#f59e0b"/>
+                  <FeatureBar label="Valence (Positivity)" value={avgFeatures.valence} color="#1DB954"/>
+                  <FeatureBar label="Danceability" value={avgFeatures.danceability} color="#3b82f6"/>
+                  <FeatureBar label="Acousticness" value={avgFeatures.acousticness} color="#8b5cf6"/>
+                  <FeatureBar label="Instrumentalness" value={avgFeatures.instrumentalness} color="#ec4899"/>
+                  <FeatureBar label="Speechiness" value={avgFeatures.speechiness} color="#14b8a6"/>
+                  <div style={{marginTop:20,padding:"16px 0",borderTop:"1px solid #1a1a1a",display:"flex",gap:16}}>
+                    <StatPill label="Avg BPM" value={avgTempo?Math.round(avgTempo):"—"}/>
+                    <StatPill label="Energy" value={Math.round(avgFeatures.energy*100)+"%"} color="#f59e0b"/>
+                    <StatPill label="Mood" value={avgFeatures.valence>0.5?"Positive":"Dark"} color={avgFeatures.valence>0.5?"#1DB954":"#888"}/>
+                  </div>
+                </div>
+              ) : (
+                <div style={{padding:"40px 0",textAlign:"center",color:"#333",fontFamily:"'JetBrains Mono',monospace",fontSize:12}}>Audio features unavailable</div>
+              )}
+            </Card>
+            <div style={{display:"flex",flexDirection:"column",gap:20}}>
+              <Card>
+                <SectionLabel>Personality Radar</SectionLabel>
+                <div style={{display:"flex",justifyContent:"center",paddingTop:8}}>
+                  <RadarChart data={vibes}/>
+                </div>
+              </Card>
+              <Card>
+                <SectionLabel>What The Numbers Say</SectionLabel>
+                <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                  {[
+                    avgFeatures.instrumentalness>0.4 && "High instrumentalness — you lean toward music where sound does the talking, not lyrics.",
+                    avgFeatures.acousticness>0.4 && "Significant acousticness — organic instrumentation holds real weight in your rotation.",
+                    avgFeatures.energy>0.7 && "High energy across the board — your music moves, even when it's experimental.",
+                    avgFeatures.energy<0.4 && "Low average energy — you gravitate toward restrained, textured, or atmospheric sound.",
+                    avgFeatures.danceability>0.65 && "Strong danceability — rhythm and groove are central to your taste.",
+                    avgFeatures.valence<0.35 && "Low valence — emotionally, your music skews dark and introspective.",
+                    avgFeatures.valence>0.65 && "High valence — your taste tends toward the euphoric and uplifting.",
+                    avgTempo>130 && "Fast average BPM — you're drawn to music that moves at pace.",
+                    avgTempo<90 && "Slow average BPM — patience and space matter in what you listen to.",
+                  ].filter(Boolean).map((txt,i)=>(
+                    <div key={i} style={{fontSize:13,color:"#666",fontFamily:"'Playfair Display',serif",fontStyle:"italic",lineHeight:1.7,paddingLeft:12,borderLeft:"2px solid #1DB95440"}}>
+                      {txt}
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            </div>
+          </div>
+        )}
+
+        {/* ── TOP TRACKS ── */}
+        {activeTab==="tracks" && (
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
+            <Card>
+              <SectionLabel>Top Tracks · {timeRange==="short"?"4 Weeks":timeRange==="medium"?"6 Months":"All Time"}</SectionLabel>
+              {tracks.slice(0,25).map((t,i)=><TrackRow key={t.id+i} track={t} rank={i+1}/>)}
+            </Card>
+            <Card>
+              <SectionLabel>Top Artists · {timeRange==="short"?"4 Weeks":timeRange==="medium"?"6 Months":"All Time"}</SectionLabel>
+              {artists.slice(0,25).map((a,i)=><ArtistRow key={a.id} artist={a} rank={i+1}/>)}
+            </Card>
+          </div>
+        )}
+
+      </main>
     </div>
   );
 }
 
-const btnS = {background:"#1DB954",color:"#000",border:"none",borderRadius:100,padding:"13px 36px",fontSize:14,fontWeight:700,cursor:"pointer"};
-const lblS = {fontSize:9,letterSpacing:"2px",textTransform:"uppercase",color:"#2a2a2a",marginBottom:16,fontFamily:"monospace"};
+const btnS={background:"#1DB954",color:"#000",border:"none",borderRadius:8,padding:"14px 40px",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:"'Inter',sans-serif",letterSpacing:"0.5px"};
 
 ReactDOM.render(<App/>, document.getElementById("root"));
 </script>
