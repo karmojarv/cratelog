@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cratelog</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #080808; color: #fff; font-family: 'DM Mono','Courier New',monospace; min-height: 100vh; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fadeUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: #080808; }
+::-webkit-scrollbar-thumb { background: #1a1a1a; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const CLIENT_ID = "c7a8b447f9934221825fd322a7b915b5";
+const SCOPES = "user-top-read user-read-recently-played user-library-read playlist-read-private user-read-currently-playing";
+
+function getRedirectUri() {
+  return window.location.href.split("?")[0].split("#")[0];
+}
+
+function doAuth(onToken) {
+  const url = "https://accounts.spotify.com/authorize?" + new URLSearchParams({
+    client_id: CLIENT_ID, response_type: "token",
+    redirect_uri: getRedirectUri(), scope: SCOPES, show_dialog: "true",
+  });
+  const w = 480, h = 660;
+  const left = Math.round(window.screenX + (window.outerWidth - w) / 2);
+  const top = Math.round(window.screenY + (window.outerHeight - h) / 2);
+  const popup = window.open(url, "sp", "width="+w+",height="+h+",left="+left+",top="+top+",toolbar=no,menubar=no");
+  if (!popup) { window.location.href = url; return; }
+  const timer = setInterval(function() {
+    try {
+      if (!popup || popup.closed) { clearInterval(timer); return; }
+      const hash = popup.location.hash;
+      if (hash && hash.includes("access_token")) {
+        const params = new URLSearchParams(hash.slice(1));
+        const token = params.get("access_token");
+        if (token) {
+          sessionStorage.setItem("sp_token", token);
+          onToken(token);
+          popup.close();
+          clearInterval(timer);
+        }
+      }
+    } catch(e) {}
+  }, 400);
+}
+
+async function sGet(path, token) {
+  const r = await fetch("https://api.spotify.com/v1" + path, { headers: { Authorization: "Bearer " + token } });
+  if (r.status === 204) return null;
+  if (!r.ok) throw new Error(String(r.status));
+  return r.json();
+}
+
+async function fetchAllRanges(type, token) {
+  const [s, m, l] = await Promise.all([
+    sGet("/me/top/"+type+"?limit=50&time_range=short_term", token),
+    sGet("/me/top/"+type+"?limit=50&time_range=medium_term", token),
+    sGet("/me/top/"+type+"?limit=50&time_range=long_term", token),
+  ]);
+  return { short: (s&&s.items)||[], medium: (m&&m.items)||[], long: (l&&l.items)||[] };
+}
+
+async function askClaude(prompt) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514", max_tokens: 1000,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  const data = await res.json();
+  return (data.content && data.content[0] && data.content[0].text) || "";
+}
+
+function genreColor(genre) {
+  const hash = genre.split("").reduce(function(a,c){ return a + c.charCodeAt(0); }, 0);
+  const hues = [160,195,45,280,340,20,90,230];
+  return "hsl("+hues[hash % hues.length]+",70%,55%)";
+}
+
+function aggregateGenres(artists) {
+  const counts = {};
+  artists.forEach(function(a) {
+    (a.genres||[]).forEach(function(g){ counts[g] = (counts[g]||0) + 1; });
+  });
+  return Object.entries(counts).sort(function(a,b){ return b[1]-a[1]; }).slice(0,20);
+}
+
+function newIn(current, prev) {
+  const prevIds = new Set(prev.map(function(x){ return x.id; }));
+  return current.filter(function(x){ return !prevIds.has(x.id); });
+}
+
+function inCommon(a, b) {
+  const bIds = new Set(b.map(function(x){ return x.id; }));
+  return a.filter(function(x){ return bIds.has(x.id); });
+}
+
+function vibeFromGenres(genres) {
+  const g = genres.map(function(x){ return x[0]; }).join(" ");
+  return {
+    "Energy": g.match(/metal|punk|hardcore|drum.bass|techno|gabber|industrial/) ? 9
+      : g.match(/electronic|edm|dance|house|rave/) ? 7
+      : g.match(/ambient|classical|folk|acoustic/) ? 2
+      : g.match(/jazz|soul|r.b|blues/) ? 4 : 5,
+    "Experimentalism": g.match(/experimental|avant|noise|glitch|abstract|outsider/) ? 9
+      : g.match(/art|post|neo|new.wave|indie/) ? 6
+      : g.match(/pop|country|top.40/) ? 2 : 4,
+    "Darkness": g.match(/black.metal|goth|dark|death|doom|drone/) ? 9
+      : g.match(/post.punk|industrial|noise/) ? 6
+      : g.match(/happy|sunshine|bubblegum/) ? 1 : 4,
+    "Danceability": g.match(/dance|house|techno|disco|funk|afrobeats|dancehall/) ? 9
+      : g.match(/electronic|hip.hop|r.b/) ? 6
+      : g.match(/ambient|classical|folk/) ? 2 : 4,
+    "Internationalism": g.match(/latin|afro|korean|japanese|french|brazilian|cumbia/) ? 8
+      : g.match(/world|global|tropical/) ? 6 : 3,
+  };
+}
+
+// ── RADAR ─────────────────────────────────────────────────────────────────────
+function RadarChart({ data }) {
+  const size = 220, cx = 110, cy = 110, r = 78;
+  const keys = Object.keys(data);
+  const n = keys.length;
+  const pts = keys.map(function(k, i) {
+    const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+    const val = data[k] / 10;
+    return {
+      x: cx + r * val * Math.cos(angle), y: cy + r * val * Math.sin(angle),
+      lx: cx + (r+30) * Math.cos(angle), ly: cy + (r+30) * Math.sin(angle), label: k,
+    };
+  });
+  const gridLevels = [0.25, 0.5, 0.75, 1];
+  return (
+    <svg width={size} height={size} style={{overflow:"visible"}}>
+      {gridLevels.map(function(lvl) {
+        const polyPts = keys.map(function(_,i){
+          const a = (i/n)*Math.PI*2 - Math.PI/2;
+          return (cx+r*lvl*Math.cos(a))+","+(cy+r*lvl*Math.sin(a));
+        }).join(" ");
+        return <polygon key={lvl} points={polyPts} fill="none" stroke="#1e1e1e" strokeWidth="1"/>;
+      })}
+      {keys.map(function(_,i){
+        const a = (i/n)*Math.PI*2 - Math.PI/2;
+        return <line key={i} x1={cx} y1={cy} x2={cx+r*Math.cos(a)} y2={cy+r*Math.sin(a)} stroke="#1e1e1e" strokeWidth="1"/>;
+      })}
+      <polygon points={pts.map(function(p){return p.x+","+p.y;}).join(" ")} fill="rgba(29,185,84,0.15)" stroke="#1DB954" strokeWidth="2"/>
+      {pts.map(function(p,i){ return <circle key={i} cx={p.x} cy={p.y} r="4" fill="#1DB954"/>; })}
+      {pts.map(function(p,i){
+        return <text key={i} x={p.lx} y={p.ly} textAnchor="middle" dominantBaseline="middle"
+          style={{fontSize:9,fill:"#555",fontFamily:"monospace",textTransform:"uppercase",letterSpacing:1}}>{p.label}</text>;
+      })}
+    </svg>
+  );
+}
+
+// ── GENRE CLOUD ───────────────────────────────────────────────────────────────
+function GenreCloud({ genres }) {
+  const max = genres[0] ? genres[0][1] : 1;
+  return (
+    <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+      {genres.map(function(item) {
+        const name = item[0], count = item[1];
+        const size = 10 + (count/max)*10;
+        const col = genreColor(name);
+        return <span key={name} style={{fontSize:size,color:col,fontFamily:"monospace",opacity:0.6+(count/max)*0.4,letterSpacing:"0.5px",textShadow:"0 0 16px "+col+"50"}}>{name}</span>;
+      })}
+    </div>
+  );
+}
+
+// ── ARTIST ROW ────────────────────────────────────────────────────────────────
+function ArtistRow({ artist, rank, isNew, isGone }) {
+  const img = (artist.images&&artist.images[2]&&artist.images[2].url) || (artist.images&&artist.images[1]&&artist.images[1].url);
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",borderBottom:"1px solid #111",opacity:isGone?0.3:1}}>
+      <span style={{width:20,textAlign:"right",color:"#333",fontSize:11,flexShrink:0}}>{rank}</span>
+      {img
+        ? <img src={img} alt="" style={{width:36,height:36,borderRadius:"50%",objectFit:"cover",flexShrink:0}}/>
+        : <div style={{width:36,height:36,borderRadius:"50%",background:"#1a1a1a",flexShrink:0}}/>
+      }
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:13,color:isGone?"#444":"#ddd",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{artist.name}</div>
+        <div style={{fontSize:10,color:"#444",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{artist.genres&&artist.genres.slice(0,2).join(" · ")}</div>
+      </div>
+      {isNew && <span style={{fontSize:9,color:"#1DB954",border:"1px solid #1DB95450",borderRadius:100,padding:"2px 7px",flexShrink:0}}>NEW</span>}
+      {isGone && <span style={{fontSize:9,color:"#444",border:"1px solid #33333360",borderRadius:100,padding:"2px 7px",flexShrink:0}}>FADED</span>}
+    </div>
+  );
+}
+
+// ── CLAUDE ANALYSIS ───────────────────────────────────────────────────────────
+function ClaudeAnalysis({ data }) {
+  const [text, setText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const ran = useRef(false);
+
+  useEffect(function() {
+    if (ran.current || !data) return;
+    ran.current = true;
+    setLoading(true);
+
+    const allTimeArtists = data.artists.long.slice(0,20).map(function(a){return a.name;}).join(", ");
+    const recentArtists = data.artists.short.slice(0,10).map(function(a){return a.name;}).join(", ");
+    const allTimeGenres = aggregateGenres(data.artists.long).slice(0,15).map(function(x){return x[0];}).join(", ");
+    const recentGenres = aggregateGenres(data.artists.short).slice(0,10).map(function(x){return x[0];}).join(", ");
+    const newArrivals = newIn(data.artists.short, data.artists.long).slice(0,5).map(function(a){return a.name;}).join(", ");
+    const allTimeTracks = data.tracks.long.slice(0,10).map(function(t){return t.name+" by "+(t.artists&&t.artists[0]&&t.artists[0].name);}).join(", ");
+
+    const prompt = `You are a music critic and cultural analyst. Analyze this person's Spotify listening data and write a rich, insightful portrait of their musical taste and identity.
+
+ALL-TIME TOP ARTISTS: ${allTimeArtists}
+RECENT TOP ARTISTS (last 4 weeks): ${recentArtists}
+ALL-TIME GENRES: ${allTimeGenres}
+RECENT GENRES: ${recentGenres}
+RECENTLY EMERGED ARTISTS: ${newArrivals||"none notable"}
+ALL-TIME TOP TRACKS: ${allTimeTracks}
+
+Write 4 sections with these exact headers (use markdown ##):
+## Your Sound Identity
+2-3 sentences describing their overall musical identity in vivid, specific language. Name the aesthetic threads. Be precise, not generic.
+
+## How Your Taste Has Evolved
+2-3 sentences on what the shift from all-time to recent listening suggests about their taste trajectory.
+
+## The Genres That Define You
+A paragraph describing their genre world in cultural/critical terms — not just listing genres but explaining what they mean together.
+
+## What Your Taste Says About You
+2-3 sentences on the personality and aesthetic values implied. Be specific and a little bold.
+
+Be specific, intelligent, avoid generic phrases like "eclectic taste". Write like a good music journalist.`;
+
+    askClaude(prompt).then(function(t){ setText(t); setLoading(false); })
+      .catch(function(){ setText("Could not generate analysis — Claude API unavailable."); setLoading(false); });
+  }, [data]);
+
+  if (loading) return (
+    <div style={{padding:"32px 0",textAlign:"center"}}>
+      <div style={{display:"inline-block",width:24,height:24,border:"2px solid #1a1a1a",borderTop:"2px solid #1DB954",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
+      <p style={{color:"#444",fontSize:12,marginTop:12,fontFamily:"monospace"}}>analysing your taste...</p>
+    </div>
+  );
+
+  const sections = text.split(/^## /m).filter(Boolean).map(function(s){
+    const nl = s.indexOf("\n");
+    return { title: s.slice(0,nl).trim(), body: s.slice(nl+1).trim() };
+  });
+
+  return (
+    <div style={{paddingTop:8}}>
+      {sections.map(function(s,i){
+        return (
+          <div key={i} style={{marginBottom:28}}>
+            <div style={{fontSize:9,letterSpacing:"2px",textTransform:"uppercase",color:"#1DB954",marginBottom:8,fontFamily:"monospace"}}>{s.title}</div>
+            <p style={{color:"#aaa",fontSize:14,lineHeight:1.8,margin:0,fontFamily:"Georgia,serif"}}>{s.body}</p>
+          </div>
+        );
+      })}
+      {!sections.length && text && <p style={{color:"#555",fontSize:13}}>{text}</p>}
+    </div>
+  );
+}
+
+// ── LOADER ────────────────────────────────────────────────────────────────────
+function Loader({ msg }) {
+  return (
+    <div style={{minHeight:"100vh",background:"#080808",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+      <div style={{width:28,height:28,border:"2px solid #1a1a1a",borderTop:"2px solid #1DB954",borderRadius:"50%",animation:"spin 0.8s linear infinite",marginBottom:14}}/>
+      <p style={{color:"#2a2a2a",fontSize:11,fontFamily:"monospace",letterSpacing:2,textTransform:"uppercase"}}>{msg}</p>
+    </div>
+  );
+}
+
+// ── MAIN APP ──────────────────────────────────────────────────────────────────
+function App() {
+  const [token, setToken] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [fetchingData, setFetchingData] = useState(false);
+  const [error, setError] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [data, setData] = useState(null);
+  const [activeTab, setActiveTab] = useState("identity");
+
+  useEffect(function() {
+    const stored = sessionStorage.getItem("sp_token");
+    const hash = window.location.hash;
+    if (hash && hash.includes("access_token")) {
+      const params = new URLSearchParams(hash.slice(1));
+      const t = params.get("access_token");
+      if (t) {
+        sessionStorage.setItem("sp_token", t);
+        window.history.replaceState({}, "", window.location.pathname);
+        setToken(t);
+        setLoading(false);
+        return;
+      }
+    }
+    if (stored) setToken(stored);
+    setLoading(false);
+  }, []);
+
+  useEffect(function() {
+    if (!token) return;
+    setFetchingData(true);
+    Promise.all([
+      sGet("/me", token),
+      fetchAllRanges("artists", token),
+      fetchAllRanges("tracks", token),
+    ]).then(function(results) {
+      setProfile(results[0]);
+      setData({ artists: results[1], tracks: results[2] });
+      setFetchingData(false);
+    }).catch(function(e) {
+      if (e.message === "401") { sessionStorage.removeItem("sp_token"); setToken(null); }
+      else setError("Failed to load Spotify data.");
+      setFetchingData(false);
+    });
+  }, [token]);
+
+  function logout() {
+    sessionStorage.removeItem("sp_token");
+    setToken(null); setData(null); setProfile(null);
+  }
+
+  if (loading) return <Loader msg="initialising"/>;
+  if (fetchingData) return <Loader msg="digging through your crates"/>;
+  if (error) return (
+    <div style={{minHeight:"100vh",background:"#080808",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+      <p style={{color:"#ff4444",marginBottom:16}}>{error}</p>
+      <button style={btnStyle} onClick={logout}>Retry</button>
+    </div>
+  );
+
+  if (!token) return (
+    <div style={{minHeight:"100vh",background:"#080808",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{textAlign:"center",animation:"fadeUp 0.5s ease",maxWidth:320}}>
+        <div style={{fontSize:40,marginBottom:20,color:"#1DB954"}}>◈</div>
+        <h1 style={{fontSize:28,fontWeight:700,color:"#fff",margin:"0 0 10px",letterSpacing:"-0.5px",fontFamily:"Georgia,serif"}}>Cratelog</h1>
+        <p style={{color:"#444",fontSize:13,lineHeight:1.7,marginBottom:28,fontFamily:"monospace"}}>
+          Map how your music has evolved.<br/>Understand the sound that defines you.
+        </p>
+        <button style={btnStyle} onClick={function(){ doAuth(setToken); }}>Connect Spotify</button>
+      </div>
+    </div>
+  );
+
+  if (!data) return <Loader msg="loading"/>;
+
+  const longGenres = aggregateGenres(data.artists.long);
+  const shortGenres = aggregateGenres(data.artists.short);
+  const vibes = vibeFromGenres(longGenres);
+  const newArtists = newIn(data.artists.short, data.artists.long);
+  const fadedArtists = newIn(data.artists.long.slice(0,20), data.artists.short);
+  const stableArtists = inCommon(data.artists.long.slice(0,20), data.artists.short.slice(0,20));
+
+  const tabs = [
+    {id:"identity",label:"Identity"},
+    {id:"evolution",label:"Evolution"},
+    {id:"genres",label:"Genres"},
+    {id:"vibe",label:"Vibe"},
+  ];
+
+  return (
+    <div style={{minHeight:"100vh",background:"#080808"}}>
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px",borderBottom:"1px solid #111"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{color:"#1DB954",fontSize:16}}>◈</span>
+          <div>
+            <div style={{fontSize:10,color:"#2a2a2a",letterSpacing:"2px",fontFamily:"monospace"}}>CRATELOG</div>
+            <div style={{fontSize:13,color:"#555",fontFamily:"monospace"}}>{profile&&profile.display_name}</div>
+          </div>
+        </div>
+        <button onClick={logout} style={{background:"none",border:"1px solid #1a1a1a",color:"#333",borderRadius:100,padding:"5px 12px",fontSize:11,cursor:"pointer",fontFamily:"monospace"}}>disconnect</button>
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",borderBottom:"1px solid #111",overflowX:"auto"}}>
+        {tabs.map(function(t){
+          const active = activeTab === t.id;
+          return (
+            <button key={t.id} onClick={function(){ setActiveTab(t.id); }}
+              style={{flex:1,background:"none",border:"none",color:active?"#1DB954":"#2a2a2a",padding:"13px 8px",fontSize:11,cursor:"pointer",letterSpacing:"2px",textTransform:"uppercase",fontFamily:"monospace",borderBottom:active?"2px solid #1DB954":"2px solid transparent",whiteSpace:"nowrap"}}>
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Content */}
+      <div style={{padding:"24px 20px 48px"}}>
+
+        {activeTab === "identity" && (
+          <div>
+            <div style={labelStyle}>AI Portrait of Your Taste</div>
+            <ClaudeAnalysis data={data}/>
+          </div>
+        )}
+
+        {activeTab === "evolution" && (
+          <div>
+            <div style={labelStyle}>Taste Drift · All Time → Last 4 Weeks</div>
+            <p style={{fontSize:12,color:"#333",marginBottom:20,lineHeight:1.6,fontFamily:"monospace"}}>
+              {stableArtists.length} constants · {newArtists.length} newly emerged · {fadedArtists.length} fading
+            </p>
+
+            {newArtists.length > 0 && (
+              <div style={{marginBottom:24}}>
+                <div style={{fontSize:9,letterSpacing:"2px",color:"#1DB954",marginBottom:10,fontFamily:"monospace"}}>RECENTLY EMERGED</div>
+                {newArtists.slice(0,8).map(function(a,i){ return <ArtistRow key={a.id} artist={a} rank={i+1} isNew={true}/>; })}
+              </div>
+            )}
+
+            <div style={{marginBottom:24}}>
+              <div style={{fontSize:9,letterSpacing:"2px",color:"#666",marginBottom:10,fontFamily:"monospace"}}>LONG-TERM CONSTANTS</div>
+              {stableArtists.slice(0,8).map(function(a,i){ return <ArtistRow key={a.id} artist={a} rank={i+1}/>; })}
+            </div>
+
+            {fadedArtists.length > 0 && (
+              <div style={{marginBottom:28}}>
+                <div style={{fontSize:9,letterSpacing:"2px",color:"#333",marginBottom:10,fontFamily:"monospace"}}>FADING FROM ROTATION</div>
+                {fadedArtists.slice(0,6).map(function(a,i){ return <ArtistRow key={a.id} artist={a} rank={i+1} isGone={true}/>; })}
+              </div>
+            )}
+
+            <div style={labelStyle}>Genre Shift</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+              <div>
+                <div style={{fontSize:9,color:"#333",letterSpacing:2,marginBottom:10,fontFamily:"monospace"}}>ALL TIME</div>
+                <GenreCloud genres={longGenres.slice(0,12)}/>
+              </div>
+              <div>
+                <div style={{fontSize:9,color:"#1DB954",letterSpacing:2,marginBottom:10,fontFamily:"monospace"}}>RECENT</div>
+                <GenreCloud genres={shortGenres.slice(0,12)}/>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "genres" && (
+          <div>
+            <div style={labelStyle}>Your Genre Universe</div>
+            <GenreCloud genres={longGenres}/>
+            <div style={{marginTop:28}}>
+              <div style={labelStyle}>Top 20 Genres by Frequency</div>
+              {longGenres.map(function(item, i){
+                const name = item[0], count = item[1];
+                const max = longGenres[0][1];
+                return (
+                  <div key={name} style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                    <span style={{width:16,fontSize:10,color:"#2a2a2a",textAlign:"right",fontFamily:"monospace"}}>{i+1}</span>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                        <span style={{fontSize:12,color:"#888",fontFamily:"monospace"}}>{name}</span>
+                        <span style={{fontSize:10,color:"#2a2a2a",fontFamily:"monospace"}}>{count}</span>
+                      </div>
+                      <div style={{height:2,background:"#111",borderRadius:1}}>
+                        <div style={{height:"100%",width:((count/max)*100)+"%",background:genreColor(name),borderRadius:1}}/>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {activeTab === "vibe" && (
+          <div>
+            <div style={labelStyle}>Listening Personality</div>
+            <div style={{display:"flex",justifyContent:"center",padding:"16px 0 8px"}}>
+              <RadarChart data={vibes}/>
+            </div>
+            <div style={{marginTop:8}}>
+              {Object.entries(vibes).map(function(entry){
+                const k = entry[0], v = entry[1];
+                return (
+                  <div key={k} style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
+                    <span style={{width:110,fontSize:10,color:"#333",letterSpacing:1.5,textTransform:"uppercase",fontFamily:"monospace",flexShrink:0}}>{k}</span>
+                    <div style={{flex:1,height:3,background:"#111",borderRadius:2}}>
+                      <div style={{height:"100%",width:(v*10)+"%",background:"hsl("+(100+v*8)+",70%,50%)",borderRadius:2}}/>
+                    </div>
+                    <span style={{width:20,fontSize:11,color:"#444",textAlign:"right",fontFamily:"monospace"}}>{v}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{marginTop:28}}>
+              <div style={labelStyle}>All-Time Top Artists</div>
+              {data.artists.long.slice(0,15).map(function(a,i){ return <ArtistRow key={a.id} artist={a} rank={i+1}/>; })}
+            </div>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
+
+const btnStyle = {background:"#1DB954",color:"#000",border:"none",borderRadius:100,padding:"13px 36px",fontSize:14,fontWeight:700,cursor:"pointer"};
+const labelStyle = {fontSize:9,letterSpacing:"2px",textTransform:"uppercase",color:"#2a2a2a",marginBottom:16,fontFamily:"monospace"};
+
+ReactDOM.render(<App/>, document.getElementById("root"));
+</script>
+</body>
+</html>
